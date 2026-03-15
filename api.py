@@ -1,5 +1,5 @@
 """
-PDF Splitter API - FastAPI backend
+4uPDF API - FastAPI backend
 Splits scanned PDFs by order number using OCR (RapidOCR)
 """
 
@@ -11,14 +11,16 @@ import json
 import time
 import uuid
 import threading
+import zipfile
+import io
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from rapidocr_onnxruntime import RapidOCR
 
-app = FastAPI(title="PDF Splitter")
+app = FastAPI(title="4uPDF")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # Global state for jobs
@@ -156,18 +158,18 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/api/split")
+@app.post("/api/split-ocr")
 async def start_split(
     file: UploadFile = File(None),
-    input_path: str = None,
-    output_dir: str = "output",
-    pattern: str = r"(?:Nr\.?\s*comanda:?\s*)(\d{8})",
-    crop_left: float = 0.5,
-    crop_top: float = 0.0,
-    crop_right: float = 1.0,
-    crop_bottom: float = 0.2,
-    dpi: int = 150,
-    filename_template: str = "{order}"
+    input_path: str = Form(None),
+    output_dir: str = Form("output"),
+    pattern: str = Form(r"(?:Nr\.?\s*comanda:?\s*)(\d{8})"),
+    crop_left: float = Form(0.5),
+    crop_top: float = Form(0.0),
+    crop_right: float = Form(1.0),
+    crop_bottom: float = Form(0.2),
+    dpi: int = Form(150),
+    filename_template: str = Form("{order}")
 ):
     """Start a PDF split job."""
     # Handle file upload or path
@@ -304,7 +306,50 @@ def browse_folder(path: str = "."):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/api/download-all")
+def download_all(output_dir: str = "output"):
+    """Download all split PDFs as a ZIP file."""
+    p = Path(output_dir)
+    if not p.exists():
+        return JSONResponse({"error": "Output directory not found"}, status_code=404)
+
+    pdfs = list(p.glob("*.pdf"))
+    if not pdfs:
+        return JSONResponse({"error": "No PDF files found"}, status_code=404)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for pdf in pdfs:
+            zf.write(pdf, pdf.name)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=split-pdfs.zip"}
+    )
+
+
+@app.get("/api/defaults")
+def get_defaults():
+    """Return server-appropriate default paths."""
+    base = Path(__file__).parent.resolve()
+    input_dir = base / "input"
+    output_dir = base / "output"
+    input_dir.mkdir(exist_ok=True)
+    output_dir.mkdir(exist_ok=True)
+    return {
+        "inputPath": str(input_dir),
+        "outputDir": str(output_dir),
+    }
+
+
+# Include Phase 1 tool routes (merge, split, compress, convert)
+from routes import router as tools_router
+app.include_router(tools_router, prefix="/api")
+
+
 if __name__ == "__main__":
     import uvicorn
-    print("Starting PDF Splitter API on http://localhost:3099")
+    print("Starting 4uPDF API on http://localhost:3099")
     uvicorn.run(app, host="0.0.0.0", port=3099)
