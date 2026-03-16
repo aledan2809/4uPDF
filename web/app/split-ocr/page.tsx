@@ -33,16 +33,16 @@ interface JobStatus {
 // Pattern presets - friendly names hiding regex complexity
 const PATTERN_PRESETS = [
   {
-    id: "nr_comanda_8",
+    id: "order_8",
     label: "Order number + 8 digits",
-    description: "Ex: Nr. comanda: 72544251",
-    pattern: "(?:Nr\\.?\\s*comanda:?\\s*)(\\d{8})",
+    description: "Ex: Order No: 72544251",
+    pattern: "(?:Order\\s*(?:No\\.?|#|:)?\\s*)(\\d{8})",
   },
   {
-    id: "nr_comanda_any",
+    id: "order_any",
     label: "Order number + any digits",
-    description: "Ex: Nr. comanda: 123, Nr. comanda: 999999",
-    pattern: "(?:Nr\\.?\\s*comanda:?\\s*)(\\d{3,12})",
+    description: "Ex: Order No: 123, Order #999999",
+    pattern: "(?:Order\\s*(?:No\\.?|#|:)?\\s*)(\\d{3,12})",
   },
   {
     id: "any_8_digits",
@@ -77,7 +77,7 @@ const CROP_PRESETS = [
 ];
 
 const DEFAULT_CONFIG = {
-  patternPreset: "nr_comanda_8",
+  patternPreset: "order_8",
   patternKeyword: "",
   patternCustom: "",
   cropPreset: "top_right",
@@ -113,7 +113,7 @@ export default function Home() {
     const preset = PATTERN_PRESETS.find((p) => p.id === config.patternPreset);
     if (!preset) return "";
     if ("needsKeyword" in preset && preset.needsKeyword) {
-      const kw = config.patternKeyword.trim() || "Comanda";
+      const kw = config.patternKeyword.trim() || "Order";
       return `(?:${kw}:?\\s*)(\\d{3,12})`;
     }
     if ("isCustom" in preset && preset.isCustom) {

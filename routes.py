@@ -1005,13 +1005,13 @@ async def detect_document_type(
         raise HTTPException(status_code=501, detail="OCR engine not available")
 
     DOCUMENT_TYPES = {
-        "invoice": ["factura", "invoice", "nr. factura", "total de plata", "tva", "subtotal", "bill to", "invoice number", "data facturii"],
-        "order": ["comanda", "order", "nr. comanda", "order number", "purchase order", "po number", "confirmare comanda"],
-        "contract": ["contract", "acord", "agreement", "parti contractante", "clauze", "semnaturi", "terms and conditions"],
-        "delivery_note": ["aviz", "delivery note", "aviz de insotire", "livrare", "transport", "shipment", "packing list"],
-        "receipt": ["bon fiscal", "receipt", "chitanta", "casa de marcat", "bon de casa", "fiscal receipt"],
-        "report": ["raport", "report", "sumar", "summary", "analiza", "statistics", "rezultate"],
-        "letter": ["stimate", "dear", "va rugam", "cu stima", "regards", "sincerely", "scrisoare"],
+        "invoice": ["invoice", "invoice number", "total", "tax", "vat", "subtotal", "bill to", "amount due", "payment terms"],
+        "order": ["order", "order number", "purchase order", "po number", "order confirmation", "sales order", "order date"],
+        "contract": ["contract", "agreement", "parties", "clauses", "signatures", "terms and conditions", "effective date"],
+        "delivery_note": ["delivery note", "delivery", "transport", "shipment", "packing list", "shipping", "consignment"],
+        "receipt": ["receipt", "fiscal receipt", "cash register", "payment received", "transaction", "payment confirmation"],
+        "report": ["report", "summary", "analysis", "statistics", "results", "findings", "conclusions"],
+        "letter": ["dear", "regards", "sincerely", "to whom", "subject", "yours truly", "best regards"],
     }
 
     try:
@@ -1103,10 +1103,10 @@ async def process_archive(
         raise HTTPException(status_code=501, detail="OCR engine not available")
 
     DOCUMENT_TYPES = {
-        "invoices": ["factura", "invoice", "nr. factura", "total de plata", "tva"],
-        "orders": ["comanda", "order", "nr. comanda", "order number", "purchase order"],
-        "contracts": ["contract", "acord", "agreement", "parti contractante"],
-        "delivery_notes": ["aviz", "delivery note", "aviz de insotire", "livrare"],
+        "invoices": ["invoice", "invoice number", "total", "tax", "vat"],
+        "orders": ["order", "order number", "purchase order", "po number", "sales order"],
+        "contracts": ["contract", "agreement", "parties", "terms and conditions"],
+        "delivery_notes": ["delivery note", "delivery", "shipment", "packing list"],
         "other": [],
     }
 
@@ -1357,7 +1357,7 @@ async def split_by_pattern(
 @router.post("/split-invoice")
 async def split_by_invoice(
     file: UploadFile = File(...),
-    pattern: str = Form(r"(?:invoice|factura|order|comanda)\s*(?:nr\.?|no\.?|number)?[:\s#]*(\d+)"),
+    pattern: str = Form(r"(?:invoice|order|po|ref)\s*(?:nr\.?|no\.?|number)?[:\s#]*(\d+)"),
     dpi: int = Form(150)
 ):
     """Split PDF by invoice/order numbers detected via OCR."""

@@ -98,7 +98,7 @@ export default function AutoRename() {
             </div>
             <div>
               <label className="block text-sm text-gray-400 mb-1">Regex pattern (optional)</label>
-              <input className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm font-mono" placeholder="e.g. Factura\s*(\d+)" value={pattern} onChange={(e) => setPattern(e.target.value)} />
+              <input className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm font-mono" placeholder="e.g. Invoice\s*(\d+)" value={pattern} onChange={(e) => setPattern(e.target.value)} />
               <p className="text-xs text-gray-500 mt-1">Group (1) becomes filename. Leave empty for auto-detect.</p>
             </div>
           </div>

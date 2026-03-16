@@ -4,7 +4,7 @@ import Link from "next/link";
 
 export default function SplitInvoice() {
   const [file, setFile] = useState<File | null>(null);
-  const [pattern, setPattern] = useState("(?:invoice|factura|order|comanda)\\s*[:#]?\\s*(\\d+)");
+  const [pattern, setPattern] = useState("(?:invoice|order|po|ref)\\s*[:#]?\\s*(\\d+)");
   const [dpi, setDpi] = useState(150);
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -118,7 +118,7 @@ export default function SplitInvoice() {
               onChange={(e) => setPattern(e.target.value)}
             />
             <p className="text-xs text-gray-500 mt-1">
-              Default pattern matches: Invoice 12345, Factura: 67890, Order #111, Comanda 222
+              Default pattern matches: Invoice 12345, Order #67890, PO: 111, Ref 222
             </p>
           </div>
 

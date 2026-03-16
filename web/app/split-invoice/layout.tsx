@@ -5,7 +5,7 @@ export const metadata: Metadata = {
   description:
     "Automatically split PDF documents by invoice or order numbers using OCR. Perfect for batch processing invoices, orders, and business documents.",
   keywords:
-    "split PDF by invoice, invoice splitter, order number PDF split, OCR PDF split, batch invoice processing, split by factura",
+    "split PDF by invoice, invoice splitter, order number PDF split, OCR PDF split, batch invoice processing, PDF document splitter",
   openGraph: {
     title: "Split PDF by Invoice Number | 4uPDF",
     description:

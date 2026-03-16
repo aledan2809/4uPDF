@@ -48,16 +48,16 @@ def extract_order_from_page(page, ocr, pattern, crop_left=0.5, crop_top=0.0, cro
 
     # Normalize common OCR misreads before pattern matching
     normalized = full_text
-    normalized = normalized.replace('c0manda', 'comanda')  # 0 vs o
-    normalized = normalized.replace('C0manda', 'Comanda')
-    normalized = normalized.replace('c0rnanda', 'comanda')  # rn vs m
-    normalized = normalized.replace('cornanda', 'comanda')
+    normalized = normalized.replace('0rder', 'order')  # 0 vs o
+    normalized = normalized.replace('0RDER', 'ORDER')
+    normalized = normalized.replace('inv0ice', 'invoice')  # 0 vs o
+    normalized = normalized.replace('INV0ICE', 'INVOICE')
 
     match = re.search(pattern, normalized, re.IGNORECASE)
     order_num = match.group(1) if match else None
 
-    # Fallback: if pattern not found but text contains truncated OCR like "a:72544282"
-    # try to find 8-digit numbers preceded by colon (common OCR truncation of "Nr.comanda:XXXXXXXX")
+    # Fallback: if pattern not found but text contains truncated OCR like "r:72544282"
+    # try to find 8-digit numbers preceded by colon (common OCR truncation of "Order:XXXXXXXX")
     if not order_num:
         fallback = re.search(r'[a-z]?[a-z]?:(\d{8})\b', normalized)
         if fallback:
@@ -177,7 +177,7 @@ async def start_split(
     file: UploadFile = File(None),
     input_path: str = Form(None),
     output_dir: str = Form("output"),
-    pattern: str = Form(r"(?:Nr\.?\s*comanda:?\s*)(\d{8})"),
+    pattern: str = Form(r"(?:Order\s*(?:No\.?|#|:)?\s*)(\d{8})"),
     crop_left: float = Form(0.5),
     crop_top: float = Form(0.0),
     crop_right: float = Form(1.0),

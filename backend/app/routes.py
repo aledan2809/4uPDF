@@ -158,7 +158,7 @@ async def split_pdf_file(
 @router.post("/split-ocr", response_model=JobResponse)
 async def split_pdf_by_order(
     file: UploadFile = File(...),
-    pattern: str = Form(r"(?:Nr\.?\s*comanda:?\s*)(\d{8})"),
+    pattern: str = Form(r"(?:Order\s*(?:No\.?|#|:)?\s*)(\d{8})"),
     crop_left: float = Form(0.5),
     crop_top: float = Form(0.0),
     crop_right: float = Form(1.0),
