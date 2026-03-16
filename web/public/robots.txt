@@ -1,0 +1,10 @@
+# https://www.robotstxt.org/robotstxt.html
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://4updf.com/sitemap.xml
+
+# Block certain paths
+Disallow: /api/
+Disallow: /_next/
