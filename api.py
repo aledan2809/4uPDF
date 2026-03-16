@@ -46,8 +46,22 @@ def extract_order_from_page(page, ocr, pattern, crop_left=0.5, crop_top=0.0, cro
     texts = [r[1] for r in result] if result else []
     full_text = ' '.join(texts)
 
-    match = re.search(pattern, full_text, re.IGNORECASE)
+    # Normalize common OCR misreads before pattern matching
+    normalized = full_text
+    normalized = normalized.replace('c0manda', 'comanda')  # 0 vs o
+    normalized = normalized.replace('C0manda', 'Comanda')
+    normalized = normalized.replace('c0rnanda', 'comanda')  # rn vs m
+    normalized = normalized.replace('cornanda', 'comanda')
+
+    match = re.search(pattern, normalized, re.IGNORECASE)
     order_num = match.group(1) if match else None
+
+    # Fallback: if pattern not found but text contains truncated OCR like "a:72544282"
+    # try to find 8-digit numbers preceded by colon (common OCR truncation of "Nr.comanda:XXXXXXXX")
+    if not order_num:
+        fallback = re.search(r'[a-z]?[a-z]?:(\d{8})\b', normalized)
+        if fallback:
+            order_num = fallback.group(1)
 
     return order_num, full_text
 
@@ -64,6 +78,7 @@ def process_pdf_job(job_id, input_path, output_dir, pattern, crop_config, dpi, f
 
         # Phase 1: Scan all pages
         page_orders = []
+        seen_orders = set()
         for i in range(total_pages):
             page = doc[i]
             order_num, raw_text = extract_order_from_page(
@@ -73,7 +88,10 @@ def process_pdf_job(job_id, input_path, output_dir, pattern, crop_config, dpi, f
                 dpi
             )
             page_orders.append((i, order_num))
+            if order_num:
+                seen_orders.add(order_num)
             job["current_page"] = i + 1
+            job["orders_found"] = len(seen_orders)
             job["log"].append({
                 "page": i + 1,
                 "order": order_num,
@@ -108,10 +126,6 @@ def process_pdf_job(job_id, input_path, output_dir, pattern, crop_config, dpi, f
         for idx, (order, pages) in enumerate(groups.items(), 1):
             fname = filename_template.replace("{order}", order).replace("{pages}", str(len(pages))).replace("{index}", str(idx))
             output_path = os.path.join(output_dir, f"{fname}.pdf")
-            counter = 1
-            while os.path.exists(output_path):
-                output_path = os.path.join(output_dir, f"{fname}_{counter}.pdf")
-                counter += 1
 
             new_doc = fitz.open()
             for page_idx in pages:
