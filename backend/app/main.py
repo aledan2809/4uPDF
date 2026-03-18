@@ -9,6 +9,8 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 
 from .routes import router
+from .auth_routes import router as auth_router
+from .stripe_routes import router as stripe_router
 from .database import init_db
 
 
@@ -35,6 +37,8 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(auth_router)
+app.include_router(stripe_router)
 
 Path("uploads").mkdir(exist_ok=True)
 Path("output").mkdir(exist_ok=True)

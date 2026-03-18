@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { getToolMetadata, getToolJsonLd } from "../lib/seo-tools";
 
-export const metadata: Metadata = getToolMetadata("split-invoice");
+export const metadata: Metadata = getToolMetadata("unlock-pdf");
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const jsonLd = getToolJsonLd("split-invoice");
+  const jsonLd = getToolJsonLd("unlock-pdf");
   return (
     <>
       {jsonLd && (

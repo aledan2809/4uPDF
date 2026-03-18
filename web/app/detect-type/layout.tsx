@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { getToolMetadata, getToolJsonLd } from "../lib/seo-tools";
 
-export const metadata: Metadata = getToolMetadata("split-invoice");
+export const metadata: Metadata = getToolMetadata("detect-type");
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const jsonLd = getToolJsonLd("split-invoice");
+  const jsonLd = getToolJsonLd("detect-type");
   return (
     <>
       {jsonLd && (
