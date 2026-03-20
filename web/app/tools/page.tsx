@@ -1,7 +1,5 @@
 import { Metadata } from "next";
 import Link from "next/link";
-import Navbar from "../components/Navbar";
-import Footer from "../components/Footer";
 import FAQAccordion from "../components/FAQAccordion";
 import FAQSchema from "../components/FAQSchema";
 
@@ -128,8 +126,6 @@ export default function ToolsPage() {
   return (
     <>
       <FAQSchema faqs={faqs} />
-      <Navbar />
-      <main className="min-h-screen">
         {/* Hero */}
         <section className="py-16 bg-gradient-to-b from-gray-900 to-gray-950">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
@@ -198,8 +194,6 @@ export default function ToolsPage() {
             </Link>
           </div>
         </section>
-      </main>
-      <Footer />
     </>
   );
 }

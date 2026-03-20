@@ -14,7 +14,6 @@ const toolCategories = [
       { name: "Rotate PDF", href: "/tools/rotate-pdf" },
       { name: "Delete Pages", href: "/tools/delete-pages" },
       { name: "Extract Pages", href: "/tools/extract-pages" },
-      { name: "Organize PDF", href: "/tools/organize-pdf" },
     ],
   },
   {
@@ -35,12 +34,12 @@ const toolCategories = [
     name: "Edit",
     href: "#",
     items: [
-      { name: "Edit PDF", href: "/tools/edit-pdf" },
-      { name: "Sign PDF", href: "/tools/sign-pdf" },
-      { name: "Add Watermark", href: "/tools/add-watermark" },
+      { name: "Add Watermark", href: "/tools/watermark-pdf" },
       { name: "Add Page Numbers", href: "/tools/add-page-numbers" },
-      { name: "Annotate PDF", href: "/tools/annotate-pdf" },
-      { name: "Redact PDF", href: "/tools/redact-pdf" },
+      { name: "Protect PDF", href: "/tools/protect-pdf" },
+      { name: "Unlock PDF", href: "/tools/unlock-pdf" },
+      { name: "Flatten PDF", href: "/tools/flatten-pdf" },
+      { name: "Crop PDF", href: "/tools/crop-pdf" },
     ],
   },
   {

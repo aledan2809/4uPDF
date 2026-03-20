@@ -46,6 +46,20 @@ except ImportError:
     STRIPE_AVAILABLE = False
     stripe = None
 
+# Find a Unicode-capable TrueType font for PDF text rendering (Romanian diacritics etc.)
+UNICODE_FONT_PATH = None
+for _fp in [
+    "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/times.ttf",
+    "C:/Windows/Fonts/calibri.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+]:
+    if os.path.exists(_fp):
+        UNICODE_FONT_PATH = _fp
+        break
+
 app = FastAPI(title="4uPDF API")
 
 allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3098,https://4updf.com").split(",")
@@ -2188,7 +2202,9 @@ async def word_to_pdf(file: UploadFile = File(...)):
                     (rect.x0, y_pos + fontsize),
                     line[:100],  # Truncate very long lines
                     fontsize=fontsize,
-                    color=(0, 0, 0)
+                    color=(0, 0, 0),
+                    fontfile=UNICODE_FONT_PATH,
+                    fontname="F1"
                 )
                 y_pos += fontsize * 1.5
                 line_count += 1
@@ -2335,7 +2351,9 @@ async def excel_to_pdf(file: UploadFile = File(...)):
                     (margin, y_pos + fontsize),
                     row_text[:200],
                     fontsize=fontsize,
-                    color=(0, 0, 0)
+                    color=(0, 0, 0),
+                    fontfile=UNICODE_FONT_PATH,
+                    fontname="F1"
                 )
                 y_pos += line_height
                 row_count += 1
@@ -2484,7 +2502,9 @@ async def powerpoint_to_pdf(file: UploadFile = File(...)):
                                 (50, y_pos + fontsize),
                                 line[:150],
                                 fontsize=fontsize,
-                                color=(0, 0, 0)
+                                color=(0, 0, 0),
+                                fontfile=UNICODE_FONT_PATH,
+                                fontname="F1"
                             )
                             y_pos += fontsize * 1.5
 
@@ -2794,7 +2814,9 @@ async def text_to_pdf(
                 (margin, y_pos + font_size),
                 line,
                 fontsize=font_size,
-                color=(0, 0, 0)
+                color=(0, 0, 0),
+                fontfile=UNICODE_FONT_PATH,
+                fontname="F1"
             )
             y_pos += line_height
             jobs[job_id]["progress"] = int((idx + 1) / total_lines * 100) if total_lines > 0 else 100
@@ -3271,7 +3293,9 @@ async def watermark_pdf(
                     text,
                     fontsize=font_size,
                     color=(0.5, 0.5, 0.5),
-                    morph=morph
+                    morph=morph,
+                    fontfile=UNICODE_FONT_PATH,
+                    fontname="F1"
                 )
                 shape.finish(fill_opacity=opacity)
                 shape.commit()
@@ -3358,7 +3382,9 @@ async def add_page_numbers(
                 fitz.Point(pos[0], pos[1]),
                 text,
                 fontsize=font_size,
-                color=(0, 0, 0)
+                color=(0, 0, 0),
+                fontfile=UNICODE_FONT_PATH,
+                fontname="F1"
             )
             jobs[job_id]["progress"] = int((i + 1) / total_pages * 100)
 
@@ -4072,7 +4098,9 @@ async def add_ocr_layer(
                         text,
                         fontsize=fontsize,
                         color=(1, 1, 1),
-                        render_mode=3
+                        render_mode=3,
+                        fontfile=UNICODE_FONT_PATH,
+                        fontname="F1"
                     )
 
             jobs[job_id]["progress"] = int((i + 1) / total_pages * 100)
