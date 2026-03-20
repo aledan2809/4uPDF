@@ -20,8 +20,8 @@ export default function CookieConsent() {
       timestamp: new Date().toISOString()
     }));
     setShowBanner(false);
-    if (typeof window.gtag !== 'undefined') {
-      window.gtag('consent', 'update', {
+    if (typeof (window as any).gtag !== 'undefined') {
+      (window as any).gtag('consent', 'update', {
         analytics_storage: 'granted'
       });
     }
@@ -35,8 +35,8 @@ export default function CookieConsent() {
       timestamp: new Date().toISOString()
     }));
     setShowBanner(false);
-    if (typeof window.gtag !== 'undefined') {
-      window.gtag('consent', 'update', {
+    if (typeof (window as any).gtag !== 'undefined') {
+      (window as any).gtag('consent', 'update', {
         analytics_storage: 'denied'
       });
     }
