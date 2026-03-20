@@ -1,85 +1,105 @@
 "use client";
+
 import { useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
+import Navbar from "../components/Navbar";
+import Footer from "../components/Footer";
+import { useAuth } from "../lib/auth";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const { login } = useAuth();
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError("");
     setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Login failed");
-      localStorage.setItem("token", data.access_token);
-      localStorage.setItem("user", JSON.stringify(data.user));
-      router.push("/");
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+
+    const result = await login(email, password);
+
+    if (result.success) {
+      router.push("/dashboard");
+    } else {
+      setError(result.error || "Login failed");
     }
+
+    setLoading(false);
   };
 
   return (
-    <div className="max-w-md mx-auto p-6 mt-16">
-      <h1 className="text-3xl font-bold mb-2">Sign In</h1>
-      <p className="text-gray-400 mb-6">Access your 4uPDF account</p>
+    <>
+      <Navbar />
+      <main className="min-h-screen py-16 flex items-center justify-center">
+        <div className="max-w-md w-full mx-4">
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8">
+            <div className="text-center mb-8">
+              <h1 className="text-2xl font-bold text-white mb-2">Welcome back</h1>
+              <p className="text-gray-400">Sign in to your 4uPDF account</p>
+            </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">Email</label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            className="w-full px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg focus:border-blue-500 focus:outline-none"
-          />
-        </div>
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">Password</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            className="w-full px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg focus:border-blue-500 focus:outline-none"
-          />
-        </div>
+            <form onSubmit={handleSubmit} className="space-y-6">
+              {error && (
+                <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg text-sm">
+                  {error}
+                </div>
+              )}
 
-        {error && (
-          <div className="bg-red-900/30 border border-red-800 rounded p-3 text-red-300 text-sm">
-            {error}
+              <div>
+                <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-2">
+                  Email address
+                </label>
+                <input
+                  type="email"
+                  id="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="you@example.com"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-2">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  id="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Enter your password"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white font-medium rounded-lg transition-colors"
+              >
+                {loading ? "Signing in..." : "Sign in"}
+              </button>
+            </form>
+
+            <div className="mt-6 text-center">
+              <p className="text-gray-400 text-sm">
+                Don&apos;t have an account?{" "}
+                <Link href="/signup" className="text-blue-400 hover:text-blue-300">
+                  Sign up for free
+                </Link>
+              </p>
+            </div>
           </div>
-        )}
-
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 px-4 py-3 rounded-lg font-medium transition-colors"
-        >
-          {loading ? "Signing in..." : "Sign In"}
-        </button>
-      </form>
-
-      <p className="mt-6 text-center text-gray-400 text-sm">
-        Don&apos;t have an account?{" "}
-        <Link href="/register" className="text-blue-400 hover:text-blue-300">
-          Create one free
-        </Link>
-      </p>
-    </div>
+        </div>
+      </main>
+      <Footer />
+    </>
   );
 }

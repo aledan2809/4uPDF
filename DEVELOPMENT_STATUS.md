@@ -1,57 +1,53 @@
 # Project Status - 4uPDF
 
-Last Updated: 2026-03-18
+Last Updated: 2026-03-19
 
 ## Current State
 
-### Deployed & Working
-- **Backend**: FastAPI (Python) on VPS2 (72.62.155.74), port 3099, systemd service
-- **Frontend**: Next.js on VPS2, port 3098, domain: 4updf.com
-- **All 4 Phases implemented and tested** (27/27 tests passing as of 2026-03-16)
-- **Database**: SQLAlchemy + Alembic migrations (SQLite dev, PostgreSQL-ready for prod)
-- **UI fully in English** (Romanian text removed per commit 8a25cbc)
+### Deployed & Working on VPS2 (72.62.155.74)
+- **Backend**: FastAPI (Python) port 3099 — auth, Stripe webhook, rate limiting, OCR split, all tools
+- **Frontend**: Next.js port 3098 — 50+ pages, SEO optimized, blog, pricing, login/signup
+- **Domain**: 4updf.com (nginx, unlimited file size)
+- **All 4 Phases** implemented and tested (27/27 tests)
 
-### Features Implemented
-- **Phase 1 (Core SEO Tools)**: Merge, Split (pages/ranges), Compress (low/med/high), PDF↔Word, JPG↔PDF, PDF→JPG
-- **Phase 2 (Editing)**: Rotate, Delete pages, Extract pages, Watermark, Protect/Unlock, Sign PDF
-- **Phase 3 (Smart/OCR)**: Split by text pattern, Split by barcode, Split by invoice number, Auto-rename, Document type detection
-- **Phase 4 (Automation)**: Archive processor (classify, detect-split, rename)
+### What Works
+- Split-OCR with live order counter, progress bar, stop button
+- Default: "Nr. comanda (RO) + 8 cifre", OCR zone "Top (full width)"
+- User registration/login (JWT + bcrypt 4.0.1)
+- All PDF tools (merge, split, compress, convert, rotate, watermark, sign, protect, unlock, OCR, barcode, archive)
+- SEO: meta tags, OpenGraph, JSON-LD, canonical URLs on all 21 tool pages
+- Blog: 5 SEO articles with Article schema
+- Pricing page with Stripe checkout flow (frontend ready)
 
-### Frontend Pages (22 tool pages)
-- `/merge-pdf`, `/split-pdf`, `/compress-pdf`, `/pdf-to-word`, `/word-to-pdf`, `/jpg-to-pdf`, `/pdf-to-jpg`
-- `/rotate-pdf`, `/delete-pages`, `/extract-pages`, `/watermark-pdf`, `/protect-pdf`, `/unlock-pdf`, `/sign-pdf`
-- `/split-pattern`, `/split-barcode`, `/split-invoice`, `/split-ocr`, `/auto-rename`, `/detect-type`, `/process-archive`
-- `/about`, `/sitemap.ts`
+### Recent Fixes (2026-03-18)
+- Fixed passlib/bcrypt compatibility (downgraded bcrypt to 4.0.1)
+- Fixed split-ocr 404 (frontend was calling /api/split-ocr instead of /api/split)
+- Fixed split-ocr 422 (broken rate_limit Depends removed)
+- Fixed regex escaping (single \d → double \\d in JS string)
+- Changed default preset to "nr_comanda_ro" with pattern (\\d{8})
+- Changed default OCR zone to "Top (full width)"
+- Added live order counter during scanning
+- Added Stop Processing button (backend /api/cancel/{job_id} + frontend)
+- Fixed filename _1 _2 suffix (clean output dir before splitting)
+- Nginx set to unlimited file size (client_max_body_size 0)
+- Split-invoice has plan-based size limit, split-ocr has no limit
 
-## TODO
-- [ ] SEO optimization per tool page (meta tags, structured data, OpenGraph)
-- [ ] Blog/content pages for long-tail SEO
-- [ ] User authentication (registration, login, tiers)
-- [ ] Rate limiting middleware using UsageLog model
-- [ ] Stripe integration for Pro tier (~5€/month)
-- [ ] API access for developers (paid tier)
-- [ ] File cleanup cron job on VPS (24h retention)
-- [ ] PostgreSQL migration on production (currently SQLite)
-- [ ] Analytics tracking (AnalyticsEvent model exists, not wired)
-- [ ] Ad integration for free tier
-- [ ] Performance: async workers, Redis queue, parallel page processing
-- [ ] Domain SSL / nginx fine-tuning
-- [ ] Sitemap submission to Google Search Console
-
-## Recent Changes
-- 2026-03-16: Full E2E test suite (27 tests, 100% pass) with real files
-- 2026-03-16: Romanian→English UI translation completed
-- 2026-03-15: Sign PDF, split-pattern, split-invoice UI pages added
-- 2026-03-14: Phase 2 editing tools UI (rotate, delete, extract, watermark, protect, unlock)
-- 2026-03-13: Database schema + Alembic migrations, deployment notes
-- 2026-03-13: Initial MVP - OCR-based PDF splitting by order number
+## TODO — In Progress
+- [ ] **Stripe setup (IN PROGRESS)**: Webhook destination being created in Stripe Dashboard
+  - Events to select: checkout.session.completed, customer.subscription.deleted, customer.subscription.updated
+  - Endpoint URL: https://4updf.com/api/stripe/webhook
+  - After webhook: create Product "4uPDF Pro" at 5 EUR/month recurring
+  - Then configure VPS with: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_ID
+- [ ] Submit sitemap to Google Search Console (https://4updf.com/sitemap.xml)
+- [ ] PostgreSQL migration (optional, SQLite works fine for now)
 
 ## Technical Notes
-- **Stack**: Python FastAPI + PyMuPDF + RapidOCR (ONNX) backend, Next.js frontend
+- **Stack**: Python FastAPI + PyMuPDF + RapidOCR (backend), Next.js (frontend)
 - **Ports**: 3098 (frontend), 3099 (backend)
-- **VPS**: 72.62.155.74 (VPS2, shared with ave-platform, website-guru, etc.)
-- **Domain**: 4updf.com
-- **DB Models**: User, ProcessingJob, UsageLog, FileCleanupLog, AnalyticsEvent
-- **Monetization**: Free (ads, 50MB limit) → Pro ~5€/mo (batch, automation, no ads) → API/B2B
-- **Growth target**: 20k visits/6mo → 100k/12mo → 500k+/24mo via SEO
-- **Git**: 9 commits, last deploy 2026-03-16
+- **VPS**: 72.62.155.74 (VPS2)
+- **Auth**: JWT (PyJWT + bcrypt 4.0.1), 24h token expiry
+- **Stripe account**: Class RDA Impex SRL sandbox (acct_1TCKjHAJZnzv9xfg)
+- **DB**: SQLite at data/4updf.db (sync backend, not async)
+- **Backend file**: /var/www/4updf/api.py (5800+ lines, monolith)
+- **Frontend**: /var/www/4updf/web/ (Next.js, PM2 managed)
+- **New deps installed on VPS**: bcrypt 4.0.1, passlib, pyjwt, stripe, python-magic, slowapi

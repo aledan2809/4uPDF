@@ -1,0 +1,30 @@
+[Unit]
+Description=4uPDF FastAPI Backend
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/4updf
+Environment="PATH=/var/www/4updf/venv/bin"
+Environment="JWT_SECRET_KEY=your-secret-key-here"
+Environment="ALLOWED_ORIGINS=https://4updf.com,https://www.4updf.com"
+Environment="STRIPE_SECRET_KEY=your-stripe-key"
+ExecStart=/var/www/4updf/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8000 --workers 4
+Restart=always
+RestartSec=10
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/www/4updf/data /var/www/4updf/uploads /var/www/4updf/output
+
+# Logging
+StandardOutput=append:/var/log/4updf/backend.log
+StandardError=append:/var/log/4updf/backend-error.log
+
+[Install]
+WantedBy=multi-user.target

@@ -16,6 +16,8 @@ import os
 db_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./4updf.db")
 if db_url.startswith("postgresql://"):
     db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+if "sslmode=" in db_url:
+    db_url = db_url.replace("sslmode=require", "ssl=require")
 os.environ["DATABASE_URL"] = db_url
 
 from app.database import Base
@@ -25,6 +27,9 @@ config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Set the database URL from environment
+config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = Base.metadata
 

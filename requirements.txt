@@ -4,3 +4,13 @@ fastapi
 uvicorn
 python-multipart
 numpy
+python-docx
+Pillow
+openpyxl
+python-pptx
+pyjwt
+passlib[bcrypt]
+stripe
+python-dotenv
+python-magic
+slowapi

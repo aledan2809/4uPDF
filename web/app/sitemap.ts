@@ -1,94 +1,150 @@
 import { MetadataRoute } from "next";
+import { getAllBlogPosts } from '../lib/blog';
+
+const BASE_URL = "https://4updf.com";
+
+const tools = [
+  "merge-pdf",
+  "split-pdf",
+  "compress-pdf",
+  "rotate-pdf",
+  "delete-pages",
+  "extract-pages",
+  "crop-pdf",
+  "repair-pdf",
+  "pdf-to-word",
+  "pdf-to-excel",
+  "pdf-to-powerpoint",
+  "pdf-to-jpg",
+  "pdf-to-png",
+  "pdf-to-text",
+  "word-to-pdf",
+  "excel-to-pdf",
+  "powerpoint-to-pdf",
+  "jpg-to-pdf",
+  "png-to-pdf",
+  "text-to-pdf",
+  "watermark-pdf",
+  "add-page-numbers",
+  "ocr-pdf",
+  "searchable-pdf",
+  "split-by-text",
+  "split-invoices",
+  "auto-rename-pdf",
+  "document-detector",
+  "extract-text-from-pdf",
+  "protect-pdf",
+  "unlock-pdf",
+  "flatten-pdf",
+  "archive-processor",
+  "invoice-extractor",
+  "receipt-extractor",
+  "batch-document-splitter",
+];
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const baseUrl = "https://4updf.com";
-
-  const tools = [
-    "merge-pdf",
-    "split-pdf",
-    "compress-pdf",
-    "pdf-to-word",
-    "word-to-pdf",
-    "jpg-to-pdf",
-    "pdf-to-jpg",
-    "rotate-pdf",
-    "delete-pages",
-    "extract-pages",
-    "watermark-pdf",
-    "protect-pdf",
-    "unlock-pdf",
-    "sign-pdf",
-    "split-pattern",
-    "split-invoice",
-    "split-barcode",
-    "split-ocr",
-    "auto-rename",
-    "detect-type",
-    "process-archive",
-  ];
-
   const staticPages = [
     {
-      url: baseUrl,
+      url: BASE_URL,
       lastModified: new Date(),
       changeFrequency: "weekly" as const,
-      priority: 1.0,
+      priority: 1,
     },
     {
-      url: `${baseUrl}/about`,
+      url: `${BASE_URL}/tools`,
+      lastModified: new Date(),
+      changeFrequency: "weekly" as const,
+      priority: 0.95,
+    },
+    {
+      url: `${BASE_URL}/blog`,
+      lastModified: new Date(),
+      changeFrequency: "daily" as const,
+      priority: 0.9,
+    },
+    {
+      url: `${BASE_URL}/about`,
       lastModified: new Date(),
       changeFrequency: "monthly" as const,
-      priority: 0.5,
+      priority: 0.8,
     },
     {
-      url: `${baseUrl}/pricing`,
+      url: `${BASE_URL}/contact`,
       lastModified: new Date(),
       changeFrequency: "monthly" as const,
       priority: 0.7,
     },
     {
-      url: `${baseUrl}/login`,
+      url: `${BASE_URL}/pricing`,
       lastModified: new Date(),
-      changeFrequency: "monthly" as const,
-      priority: 0.3,
+      changeFrequency: "weekly" as const,
+      priority: 0.9,
     },
     {
-      url: `${baseUrl}/register`,
+      url: `${BASE_URL}/automation`,
       lastModified: new Date(),
-      changeFrequency: "monthly" as const,
-      priority: 0.3,
+      changeFrequency: "weekly" as const,
+      priority: 0.85,
     },
-  ];
-
-  const blogSlugs = [
-    "how-to-merge-pdf-files-online-free",
-    "how-to-split-large-scanned-pdfs",
-    "compress-pdf-without-losing-quality",
-    "organize-scanned-document-archives",
-    "best-free-pdf-tools-2026",
-  ];
-
-  const blogPages = [
     {
-      url: `${baseUrl}/blog`,
+      url: `${BASE_URL}/batch-processing`,
+      lastModified: new Date(),
+      changeFrequency: "weekly" as const,
+      priority: 0.85,
+    },
+    {
+      url: `${BASE_URL}/dashboard`,
       lastModified: new Date(),
       changeFrequency: "weekly" as const,
       priority: 0.7,
     },
-    ...blogSlugs.map((slug) => ({
-      url: `${baseUrl}/blog/${slug}`,
+    {
+      url: `${BASE_URL}/privacy-policy`,
       lastModified: new Date(),
-      changeFrequency: "monthly" as const,
-      priority: 0.6,
-    })),
+      changeFrequency: "yearly" as const,
+      priority: 0.3,
+    },
+    {
+      url: `${BASE_URL}/terms-of-service`,
+      lastModified: new Date(),
+      changeFrequency: "yearly" as const,
+      priority: 0.3,
+    },
+    {
+      url: `${BASE_URL}/cookie-policy`,
+      lastModified: new Date(),
+      changeFrequency: "yearly" as const,
+      priority: 0.3,
+    },
   ];
+
+  const howToPages = [
+    'how-to-merge-pdf',
+    'how-to-split-pdf',
+    'how-to-compress-pdf',
+    'how-to-convert-pdf-to-word',
+    'how-to-organize-scanned-documents',
+    'how-to-extract-invoices-from-pdf',
+  ].map((page) => ({
+    url: `${BASE_URL}/${page}`,
+    lastModified: new Date(),
+    changeFrequency: "monthly" as const,
+    priority: 0.85,
+  }));
 
   const toolPages = tools.map((tool) => ({
-    url: `${baseUrl}/${tool}`,
+    url: `${BASE_URL}/tools/${tool}`,
     lastModified: new Date(),
     changeFrequency: "weekly" as const,
+    priority: 0.9,
+  }));
+
+  const blogPosts = getAllBlogPosts().map((post) => ({
+    url: `${BASE_URL}/blog/${post.slug}`,
+    lastModified: new Date(post.date),
+    changeFrequency: "monthly" as const,
     priority: 0.8,
   }));
 
-  return [...staticPages, ...blogPages, ...toolPages];
+  return [...staticPages, ...howToPages, ...toolPages, ...blogPosts];
 }

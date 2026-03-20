@@ -1,154 +1,181 @@
-import type { Metadata } from "next";
+import { Metadata } from "next";
 import Link from "next/link";
+import Navbar from "../components/Navbar";
+import Footer from "../components/Footer";
 
 export const metadata: Metadata = {
-  title: "About & Contact - 4uPDF Free Online PDF Tools",
-  description: "Learn about 4uPDF, our free online PDF tools platform. Contact us for support, feature requests, or business inquiries.",
+  title: "About Us - 4uPDF",
+  description:
+    "Learn about 4uPDF - our mission to make PDF tools accessible, fast, and secure for everyone.",
+  alternates: {
+    canonical: "https://4updf.com/about",
+  },
 };
 
 export default function AboutPage() {
   return (
-    <div className="max-w-4xl mx-auto px-6 py-12">
-      <Link href="/" className="text-blue-400 hover:text-blue-300 text-sm mb-4 inline-block">
-        &larr; Back to home
-      </Link>
+    <>
+      <Navbar />
+      <main className="min-h-screen">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+          <h1 className="text-4xl font-bold text-white mb-8">About 4uPDF</h1>
 
-      <h1 className="text-4xl font-bold mb-6">About 4uPDF</h1>
+          <div className="prose prose-invert max-w-none space-y-8">
+            <section>
+              <h2 className="text-2xl font-semibold text-white mb-4">Our Mission</h2>
+              <p className="text-gray-300 leading-relaxed text-lg">
+                At 4uPDF, we believe that powerful PDF tools should be accessible to everyone. Our
+                mission is to provide fast, secure, and easy-to-use PDF solutions that help individuals
+                and businesses work more efficiently with documents.
+              </p>
+            </section>
 
-      <div className="prose prose-invert max-w-none">
-        <section className="mb-8">
-          <h2 className="text-2xl font-semibold mb-4">What is 4uPDF?</h2>
-          <p className="text-gray-400 leading-relaxed mb-4">
-            4uPDF is a free online platform offering a comprehensive suite of PDF tools.
-            We provide simple, fast, and secure PDF processing directly in your browser without
-            requiring installation or registration.
-          </p>
-          <p className="text-gray-400 leading-relaxed">
-            Our mission is to make PDF manipulation accessible to everyone, from basic operations
-            like merging and splitting to advanced features like OCR-based invoice splitting and
-            document type detection.
-          </p>
-        </section>
-
-        <section className="mb-8">
-          <h2 className="text-2xl font-semibold mb-4">Our Tools</h2>
-          <div className="grid md:grid-cols-2 gap-6">
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
-              <h3 className="text-lg font-semibold mb-2 text-blue-400">Core Tools (Phase 1)</h3>
-              <ul className="text-gray-400 space-y-1 text-sm">
-                <li>• Merge, Split, Compress PDF</li>
-                <li>• PDF to Word / Word to PDF</li>
-                <li>• JPG to PDF / PDF to JPG</li>
-              </ul>
-            </div>
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
-              <h3 className="text-lg font-semibold mb-2 text-green-400">Editing Tools (Phase 2)</h3>
-              <ul className="text-gray-400 space-y-1 text-sm">
-                <li>• Rotate, Delete, Extract pages</li>
-                <li>• Sign, Watermark, Protect PDF</li>
-                <li>• Unlock password-protected PDFs</li>
-              </ul>
-            </div>
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
-              <h3 className="text-lg font-semibold mb-2 text-purple-400">Smart Tools (Phase 3)</h3>
-              <ul className="text-gray-400 space-y-1 text-sm">
-                <li>• Split by text pattern or invoice number</li>
-                <li>• Split by barcode / QR code</li>
-                <li>• Auto-rename PDFs using OCR</li>
-                <li>• Document type detection</li>
-              </ul>
-            </div>
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
-              <h3 className="text-lg font-semibold mb-2 text-orange-400">Automation (Phase 4)</h3>
-              <ul className="text-gray-400 space-y-1 text-sm">
-                <li>• Archive processor (bulk operations)</li>
-                <li>• Document classification pipelines</li>
-                <li>• Batch processing workflows</li>
-              </ul>
-            </div>
-          </div>
-        </section>
-
-        <section className="mb-8">
-          <h2 className="text-2xl font-semibold mb-4">Privacy & Security</h2>
-          <div className="bg-green-900/20 border border-green-800 rounded-lg p-5">
-            <ul className="text-gray-300 space-y-2">
-              <li>✓ <strong>Secure Processing:</strong> All files are processed server-side with encryption</li>
-              <li>✓ <strong>No Storage:</strong> Files are automatically deleted after processing</li>
-              <li>✓ <strong>No Registration:</strong> Use all tools without creating an account</li>
-              <li>✓ <strong>No Tracking:</strong> We don't track your documents or personal data</li>
-            </ul>
-          </div>
-        </section>
-
-        <section className="mb-8">
-          <h2 className="text-2xl font-semibold mb-4">Technology</h2>
-          <p className="text-gray-400 leading-relaxed mb-4">
-            4uPDF is built with modern web technologies:
-          </p>
-          <ul className="text-gray-400 space-y-1 list-disc list-inside">
-            <li><strong>Backend:</strong> Python FastAPI for high-performance PDF processing</li>
-            <li><strong>Frontend:</strong> Next.js 13+ with React and TailwindCSS</li>
-            <li><strong>PDF Engine:</strong> PyMuPDF (fitz) for reliable PDF manipulation</li>
-            <li><strong>OCR:</strong> RapidOCR for text recognition in scanned documents</li>
-            <li><strong>Hosting:</strong> VPS infrastructure for fast and reliable service</li>
-          </ul>
-        </section>
-
-        <section className="mb-8">
-          <h2 className="text-2xl font-semibold mb-4">Contact Us</h2>
-          <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
-            <p className="text-gray-400 mb-4">
-              Have questions, feature requests, or need support? Get in touch with us:
-            </p>
-            <div className="space-y-3 text-gray-300">
-              <div>
-                <strong className="text-white">Email:</strong> <a href="mailto:support@4updf.com" className="text-blue-400 hover:text-blue-300">support@4updf.com</a>
+            <section>
+              <h2 className="text-2xl font-semibold text-white mb-4">What We Offer</h2>
+              <p className="text-gray-300 leading-relaxed">
+                We provide a comprehensive suite of 40+ PDF tools, including:
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+                  <h3 className="text-lg font-medium text-white mb-2">Core PDF Operations</h3>
+                  <p className="text-gray-400 text-sm">
+                    Merge, split, compress, rotate, and organize your PDFs with ease.
+                  </p>
+                </div>
+                <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+                  <h3 className="text-lg font-medium text-white mb-2">File Conversions</h3>
+                  <p className="text-gray-400 text-sm">
+                    Convert PDFs to Word, Excel, PowerPoint, images, and more.
+                  </p>
+                </div>
+                <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+                  <h3 className="text-lg font-medium text-white mb-2">Editing Tools</h3>
+                  <p className="text-gray-400 text-sm">
+                    Edit, annotate, sign, add watermarks, and customize your PDFs.
+                  </p>
+                </div>
+                <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+                  <h3 className="text-lg font-medium text-white mb-2">Smart Automation</h3>
+                  <p className="text-gray-400 text-sm">
+                    OCR, document detection, invoice splitting, and data extraction.
+                  </p>
+                </div>
               </div>
-              <div>
-                <strong className="text-white">Website:</strong> <a href="https://4updf.com" className="text-blue-400 hover:text-blue-300">https://4updf.com</a>
+            </section>
+
+            <section>
+              <h2 className="text-2xl font-semibold text-white mb-4">Why Choose 4uPDF?</h2>
+              <div className="space-y-4">
+                <div className="flex gap-4">
+                  <div className="flex-shrink-0 w-12 h-12 bg-blue-600/20 rounded-lg flex items-center justify-center">
+                    <svg
+                      className="w-6 h-6 text-blue-400"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                      />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-medium text-white">Security First</h3>
+                    <p className="text-gray-400">
+                      Your files are encrypted during transfer and automatically deleted after
+                      processing. We never access or share your documents.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="flex-shrink-0 w-12 h-12 bg-green-600/20 rounded-lg flex items-center justify-center">
+                    <svg
+                      className="w-6 h-6 text-green-400"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M13 10V3L4 14h7v7l9-11h-7z"
+                      />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-medium text-white">Lightning Fast</h3>
+                    <p className="text-gray-400">
+                      Our powerful servers process your files in seconds, not minutes. No waiting, no
+                      frustration.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="flex-shrink-0 w-12 h-12 bg-orange-600/20 rounded-lg flex items-center justify-center">
+                    <svg
+                      className="w-6 h-6 text-orange-400"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-medium text-white">Free to Start</h3>
+                    <p className="text-gray-400">
+                      All basic tools are completely free. No credit card required. Upgrade only if you
+                      need advanced features.
+                    </p>
+                  </div>
+                </div>
               </div>
-              <div className="pt-3 border-t border-gray-800">
-                <p className="text-sm text-gray-500">
-                  For business inquiries, partnerships, or bulk processing needs, please contact us via email.
+            </section>
+
+            <section>
+              <h2 className="text-2xl font-semibold text-white mb-4">Contact Us</h2>
+              <p className="text-gray-300 leading-relaxed">
+                We&apos;d love to hear from you! Whether you have questions, feedback, or partnership
+                inquiries:
+              </p>
+              <div className="mt-4 space-y-2">
+                <p className="text-gray-300">
+                  General inquiries:{" "}
+                  <a href="mailto:hello@4updf.com" className="text-blue-400 hover:underline">
+                    hello@4updf.com
+                  </a>
+                </p>
+                <p className="text-gray-300">
+                  Support:{" "}
+                  <a href="mailto:support@4updf.com" className="text-blue-400 hover:underline">
+                    support@4updf.com
+                  </a>
                 </p>
               </div>
-            </div>
+              <div className="mt-6">
+                <Link
+                  href="/contact"
+                  className="inline-block px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  Contact Us
+                </Link>
+              </div>
+            </section>
           </div>
-        </section>
-
-        <section>
-          <h2 className="text-2xl font-semibold mb-4">Frequently Asked Questions</h2>
-          <div className="space-y-4">
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-              <h3 className="font-semibold text-white mb-2">Is 4uPDF really free?</h3>
-              <p className="text-gray-400 text-sm">
-                Yes, all our tools are completely free to use with no hidden fees or subscription requirements.
-              </p>
-            </div>
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-              <h3 className="font-semibold text-white mb-2">What is the file size limit?</h3>
-              <p className="text-gray-400 text-sm">
-                Most tools support files up to 50MB. Some OCR-based tools support up to 100MB for better processing.
-              </p>
-            </div>
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-              <h3 className="font-semibold text-white mb-2">Are my files safe?</h3>
-              <p className="text-gray-400 text-sm">
-                Yes. Files are processed securely and automatically deleted from our servers immediately after processing.
-                We don't store, access, or share your documents.
-              </p>
-            </div>
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-              <h3 className="font-semibold text-white mb-2">Can I use these tools for commercial purposes?</h3>
-              <p className="text-gray-400 text-sm">
-                Yes, you can use 4uPDF tools for both personal and commercial projects. For high-volume processing needs,
-                please contact us for enterprise solutions.
-              </p>
-            </div>
-          </div>
-        </section>
-      </div>
-    </div>
+        </div>
+      </main>
+      <Footer />
+    </>
   );
 }

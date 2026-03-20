@@ -1,0 +1,29 @@
+[Unit]
+Description=4uPDF Next.js Frontend
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/4updf/web
+Environment="NODE_ENV=production"
+Environment="NEXT_PUBLIC_API_URL=https://4updf.com/api"
+Environment="NEXT_PUBLIC_BASE_URL=https://4updf.com"
+Environment="NEXT_PUBLIC_GA_ID=G-XXXXXXXXXX"
+ExecStart=/usr/bin/node /var/www/4updf/web/.next/standalone/server.js
+Restart=always
+RestartSec=10
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+# Logging
+StandardOutput=append:/var/log/4updf/frontend.log
+StandardError=append:/var/log/4updf/frontend-error.log
+
+[Install]
+WantedBy=multi-user.target

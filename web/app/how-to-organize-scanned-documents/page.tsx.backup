@@ -1,0 +1,149 @@
+import type { Metadata } from "next";
+import { MDXRemote } from "next-mdx-remote/rsc";
+import { getHowToPage } from "@/lib/blog";
+import { notFound } from "next/navigation";
+import Navbar from "../components/Navbar";
+import Footer from "../components/Footer";
+import Newsletter from "../components/Newsletter";
+import SocialShare from "../components/SocialShare";
+
+const BASE_URL = "https://4updf.com";
+const PAGE_URL = `${BASE_URL}/how-to-merge-pdf`;
+
+export const metadata: Metadata = {
+  title: "How to Merge PDF Files - Complete Guide 2024",
+  description:
+    "Learn how to merge PDF files easily with our step-by-step guide. Combine multiple PDFs into one document for free. Works on any device, no software installation required.",
+  keywords: [
+    "merge PDF",
+    "combine PDF files",
+    "join PDF documents",
+    "merge PDF online",
+    "PDF merger",
+    "how to merge PDF",
+    "combine multiple PDFs",
+    "PDF tools",
+    "free PDF merger",
+  ],
+  openGraph: {
+    type: "article",
+    url: PAGE_URL,
+    title: "How to Merge PDF Files - Complete Guide 2024",
+    description:
+      "Learn how to merge PDF files easily with our step-by-step guide. Combine multiple PDFs into one document for free.",
+    images: [
+      {
+        url: "/og-merge-pdf.png",
+        width: 1200,
+        height: 630,
+        alt: "How to Merge PDF Files",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "How to Merge PDF Files - Complete Guide 2024",
+    description:
+      "Learn how to merge PDF files easily with our step-by-step guide. Combine multiple PDFs into one document for free.",
+    images: ["/og-merge-pdf.png"],
+  },
+  alternates: {
+    canonical: PAGE_URL,
+  },
+};
+
+const faqs = [
+  {
+    question: "Can I merge PDFs for free?",
+    answer:
+      "Yes! Our online PDF merger is completely free to use. You can combine multiple PDF files into one document without any cost. There's no registration required, and you can merge files up to 50MB in size.",
+  },
+  {
+    question: "How many PDF files can I merge at once?",
+    answer:
+      "With our free plan, you can merge up to 20 PDF files at once. Premium users can merge unlimited files in a single operation. Each file can be up to 50MB (free) or 500MB (premium).",
+  },
+  {
+    question: "Will merging PDFs reduce quality?",
+    answer:
+      "No, merging PDFs does not reduce quality. The process combines the files exactly as they are, preserving all images, text, fonts, and formatting. The merged PDF will maintain the same quality as the original files.",
+  },
+  {
+    question: "Can I rearrange pages before merging?",
+    answer:
+      "Yes! Our merge tool allows you to drag and drop files to reorder them before combining. You can arrange your PDFs in any sequence you want, and the merged document will follow that order.",
+  },
+  {
+    question: "Is it safe to merge PDFs online?",
+    answer:
+      "Absolutely. All file uploads and processing are encrypted using SSL/TLS. Your files are processed on secure servers and automatically deleted after 1 hour. We never access, share, or store your documents permanently.",
+  },
+  {
+    question: "Can I merge password-protected PDFs?",
+    answer:
+      "Yes, you can merge password-protected PDFs if you have the password. You'll need to enter the password for each protected file during the upload process. The merged output can also be password-protected if desired.",
+  },
+  {
+    question: "What file formats can I merge?",
+    answer:
+      "Our tool specifically merges PDF files. If you have other formats like Word, Excel, or images, you'll need to convert them to PDF first using our conversion tools, then merge them together.",
+  },
+  {
+    question: "Does the merge tool work on mobile devices?",
+    answer:
+      "Yes! Our PDF merger is fully responsive and works perfectly on smartphones and tablets. You can merge PDFs on any device with a web browser - no app installation needed.",
+  },
+];
+
+export default function HowToMergePDFPage() {
+  const page = getHowToPage("merge-pdf");
+
+  if (!page) {
+    notFound();
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      <Navbar />
+      <main className="flex-1 bg-gray-950">
+        <section className="relative overflow-hidden bg-gradient-to-br from-blue-600/20 via-purple-600/10 to-transparent">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-16 md:py-24">
+            <div className="text-center">
+              <h1 className="text-4xl md:text-5xl font-bold text-white mb-6">
+                {page.title}
+              </h1>
+              <p className="text-xl text-gray-300 mb-8 max-w-3xl mx-auto">
+                {page.description}
+              </p>
+              <Link
+                href="/tools/merge-pdf"
+                className="inline-block px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white text-lg font-medium rounded-xl transition-colors"
+              >
+                Try Merge PDF Tool
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        <section className="py-16 bg-gray-900">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="prose prose-invert prose-lg max-w-none">
+              <MDXRemote source={page.content} />
+            </div>
+
+            <div className="mt-12">
+              <SocialShare title={page.title} url={PAGE_URL} />
+            </div>
+          </div>
+        </section>
+
+        <section className="py-16 bg-gray-950">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+            <Newsletter />
+          </div>
+        </section>
+      </main>
+      <Footer />
+    </div>
+  );
+}

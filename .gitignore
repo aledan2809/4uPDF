@@ -6,3 +6,14 @@ input/
 output*/
 uploads/
 .env
+
+# Test files
+test_*.pdf
+test_*.html
+test_*.txt
+test_*.jpg
+*.backup
+data/
+*.db
+venv/
+backend/venv/
