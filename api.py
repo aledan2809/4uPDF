@@ -1419,20 +1419,19 @@ async def update_user_plan(
     return {"success": True}
 
 
+@app.post("/api/split-ocr")
 @app.post("/api/split")
 async def start_split(
-    request: Request,
     file: UploadFile = File(None),
     input_path: str = Form(None),
     output_dir: str = Form("output"),
-    pattern: str = Form(r"(?:Nr\.?\s*comanda:?\s*)(\d{8})"),
+    pattern: str = Form(r"(?:Order\s*(?:No\.?|#|:)?\s*)(\d{8})"),
     crop_left: float = Form(0.5),
     crop_top: float = Form(0.0),
     crop_right: float = Form(1.0),
     crop_bottom: float = Form(0.2),
     dpi: int = Form(150),
     filename_template: str = Form("{order}"),
-    rate_limit_info: dict = Depends(lambda r: check_rate_limit(r, max_requests=30, window=60, endpoint="split"))
 ):
     """Start a PDF split job."""
     # Handle file upload or path
@@ -1707,12 +1706,17 @@ async def merge_pdfs(files: List[UploadFile] = File(...), order: str = Form(None
         jobs[job_id]["progress"] = 100
         jobs[job_id]["output_file"] = output_path.name
 
+        # Get page count properly without memory leak
+        temp_doc = fitz.open(str(output_path))
+        page_count = temp_doc.page_count
+        temp_doc.close()
+
         return {
             "job_id": job_id,
             "status": "done",
             "download_url": f"/api/download/{output_path.name}",
             "filename": output_path.name,
-            "pages": fitz.open(str(output_path)).page_count
+            "pages": page_count
         }
     except Exception as e:
         jobs[job_id]["status"] = "error"
@@ -2243,13 +2247,14 @@ async def word_to_pdf(file: UploadFile = File(...)):
 
 @app.post("/api/pdf-to-excel")
 async def pdf_to_excel(file: UploadFile = File(...)):
-    """Convert PDF tables to Excel XLSX format."""
+    """Convert PDF tables to Excel XLSX format using PyMuPDF table detection."""
     job_id = uuid.uuid4().hex[:8]
     jobs[job_id] = {"id": job_id, "status": "processing", "progress": 0, "started_at": time.time()}
 
     saved_file = save_upload_file(file)
     try:
         from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, Border, Side
 
         doc = fitz.open(str(saved_file))
         wb = Workbook()
@@ -2258,29 +2263,72 @@ async def pdf_to_excel(file: UploadFile = File(...)):
 
         total_pages = doc.page_count
         current_row = 1
+        tables_found = 0
 
         for i, page in enumerate(doc):
-            # Extract text and try to parse tables
-            text = page.get_text()
-            lines = text.strip().split('\n')
+            # Try structured table detection first (PyMuPDF 1.23+)
+            page_tables = page.find_tables()
 
-            for line in lines:
-                if line.strip():
-                    # Split by multiple spaces or tabs to detect columns
-                    cells = [cell.strip() for cell in line.split('\t') if cell.strip()]
-                    if len(cells) == 1:
-                        cells = [cell.strip() for cell in line.split('  ') if cell.strip()]
-                    if len(cells) == 1:
-                        cells = [line.strip()]
+            if page_tables and len(page_tables.tables) > 0:
+                for table in page_tables.tables:
+                    tables_found += 1
+                    data = table.extract()
 
-                    for col_idx, cell in enumerate(cells, 1):
-                        ws.cell(row=current_row, column=col_idx, value=cell)
-                    current_row += 1
+                    for row_idx, row in enumerate(data):
+                        for col_idx, cell in enumerate(row):
+                            cell_value = cell if cell else ""
+                            cell_obj = ws.cell(row=current_row, column=col_idx + 1, value=cell_value)
+                            # Bold header row (first row of each table)
+                            if row_idx == 0:
+                                cell_obj.font = Font(bold=True)
+                            cell_obj.alignment = Alignment(wrap_text=True, vertical="top")
+                        current_row += 1
+
+                    current_row += 1  # Empty row between tables
+            else:
+                # Fallback: text-based extraction with smart column detection
+                text = page.get_text()
+                lines = text.strip().split('\n')
+
+                for line in lines:
+                    if line.strip():
+                        # Try tab-separated first, then multi-space
+                        cells = [cell.strip() for cell in line.split('\t') if cell.strip()]
+                        if len(cells) == 1:
+                            # Split by 2+ spaces (common in PDF table rendering)
+                            cells = [cell.strip() for cell in re.split(r'\s{2,}', line) if cell.strip()]
+                        if len(cells) == 1:
+                            cells = [line.strip()]
+
+                        for col_idx, cell in enumerate(cells, 1):
+                            # Try to convert numeric strings
+                            try:
+                                if '.' in cell or ',' in cell:
+                                    num_val = float(cell.replace(',', '.').replace(' ', ''))
+                                    ws.cell(row=current_row, column=col_idx, value=num_val)
+                                else:
+                                    int_val = int(cell.replace(' ', ''))
+                                    ws.cell(row=current_row, column=col_idx, value=int_val)
+                            except (ValueError, AttributeError):
+                                ws.cell(row=current_row, column=col_idx, value=cell)
+                        current_row += 1
 
             if i < total_pages - 1:
-                current_row += 1  # Empty row between pages
+                current_row += 1
 
             jobs[job_id]["progress"] = int((i + 1) / total_pages * 100)
+
+        # Auto-fit column widths
+        for column_cells in ws.columns:
+            max_length = 0
+            column = column_cells[0].column_letter
+            for cell in column_cells:
+                try:
+                    if cell.value:
+                        max_length = max(max_length, len(str(cell.value)))
+                except:
+                    pass
+            ws.column_dimensions[column].width = min(max_length + 2, 50)
 
         doc.close()
         output_path = create_output_path("converted", ".xlsx")
@@ -2294,7 +2342,8 @@ async def pdf_to_excel(file: UploadFile = File(...)):
             "status": "done",
             "download_url": f"/api/download/{output_path.name}",
             "filename": output_path.name,
-            "pages": total_pages
+            "pages": total_pages,
+            "tables_detected": tables_found
         }
     except ImportError:
         raise HTTPException(status_code=500, detail="openpyxl is required for Excel conversion")
@@ -2469,44 +2518,134 @@ async def pdf_to_powerpoint(file: UploadFile = File(...)):
 
 @app.post("/api/powerpoint-to-pdf")
 async def powerpoint_to_pdf(file: UploadFile = File(...)):
-    """Convert PowerPoint PPTX to PDF format."""
+    """Convert PowerPoint PPTX to PDF format with layout preservation."""
     job_id = uuid.uuid4().hex[:8]
     jobs[job_id] = {"id": job_id, "status": "processing", "progress": 0, "started_at": time.time()}
 
     saved_file = save_upload_file(file)
     try:
         from pptx import Presentation
-        from pptx.util import Inches
-        from PIL import Image
+        from pptx.util import Inches, Pt, Emu
+        from PIL import Image as PILImage, ImageDraw, ImageFont
 
         prs = Presentation(str(saved_file))
         output_path = create_output_path("converted", ".pdf")
 
+        # Get slide dimensions
+        slide_width = prs.slide_width or Inches(13.333)
+        slide_height = prs.slide_height or Inches(7.5)
+        pdf_width = 792  # Standard landscape
+        pdf_height = int(pdf_width * (slide_height / slide_width))
+
         pdf_doc = fitz.open()
         total_slides = len(prs.slides)
 
-        # Convert each slide to text-based PDF page
         for i, slide in enumerate(prs.slides):
-            page = pdf_doc.new_page(width=792, height=612)  # Landscape
+            # Render slide as image for accurate layout
+            img_width, img_height = 1920, int(1920 * (slide_height / slide_width))
+            img = PILImage.new("RGB", (img_width, img_height), "white")
+            draw = ImageDraw.Draw(img)
 
-            y_pos = 50
-            fontsize = 12
+            # Try to get a font for text rendering
+            font_path = UNICODE_FONT_PATH or "arial.ttf"
+            scale_x = img_width / (slide_width / 914400)  # EMU to inches to pixels
+            scale_y = img_height / (slide_height / 914400)
 
-            # Extract text from all shapes
-            for shape in slide.shapes:
-                if hasattr(shape, "text") and shape.text.strip():
-                    text_lines = shape.text.strip().split('\n')
-                    for line in text_lines:
-                        if y_pos < 550:
-                            page.insert_text(
-                                (50, y_pos + fontsize),
-                                line[:150],
-                                fontsize=fontsize,
-                                color=(0, 0, 0),
-                                fontfile=UNICODE_FONT_PATH,
-                                fontname="F1"
-                            )
-                            y_pos += fontsize * 1.5
+            # Draw background if slide has a fill
+            if hasattr(slide, 'background') and slide.background.fill:
+                try:
+                    bg = slide.background.fill
+                    if bg.type is not None and hasattr(bg, 'fore_color') and bg.fore_color:
+                        rgb = bg.fore_color.rgb
+                        draw.rectangle([0, 0, img_width, img_height], fill=f"#{rgb}")
+                except:
+                    pass
+
+            # Render shapes with positions
+            for shape in sorted(slide.shapes, key=lambda s: (s.top or 0)):
+                if not hasattr(shape, 'left') or shape.left is None:
+                    continue
+
+                # Calculate position in pixels
+                x = int((shape.left / slide_width) * img_width)
+                y = int((shape.top / slide_height) * img_height)
+                w = int((shape.width / slide_width) * img_width) if shape.width else img_width - x
+                h = int((shape.height / slide_height) * img_height) if shape.height else 50
+
+                # Handle images
+                if shape.shape_type == 13 and hasattr(shape, 'image'):  # Picture
+                    try:
+                        img_bytes = shape.image.blob
+                        shape_img = PILImage.open(io.BytesIO(img_bytes))
+                        shape_img = shape_img.convert("RGBA")
+                        shape_img = shape_img.resize((max(w, 1), max(h, 1)), PILImage.LANCZOS)
+                        img.paste(shape_img, (x, y), shape_img if shape_img.mode == "RGBA" else None)
+                    except:
+                        pass
+
+                # Handle text
+                elif hasattr(shape, "text_frame"):
+                    try:
+                        tf = shape.text_frame
+                        text_y = y
+                        for para in tf.paragraphs:
+                            if not para.text.strip():
+                                text_y += 20
+                                continue
+                            # Determine font size
+                            fs = 18  # default
+                            font_color = (0, 0, 0)
+                            is_bold = False
+                            for run in para.runs:
+                                if run.font.size:
+                                    fs = int(run.font.size / Pt(1))
+                                if run.font.bold:
+                                    is_bold = True
+                                if run.font.color and run.font.color.rgb:
+                                    rgb = str(run.font.color.rgb)
+                                    font_color = (int(rgb[0:2], 16), int(rgb[2:4], 16), int(rgb[4:6], 16))
+
+                            # Scale font size
+                            scaled_fs = max(int(fs * img_width / 1920 * 1.5), 10)
+                            try:
+                                font = ImageFont.truetype(font_path, scaled_fs)
+                            except:
+                                font = ImageFont.load_default()
+
+                            draw.text((x + 5, text_y), para.text, fill=font_color, font=font)
+                            text_y += scaled_fs + 4
+                    except:
+                        pass
+
+                # Handle tables
+                elif shape.has_table:
+                    try:
+                        table = shape.table
+                        rows = len(table.rows)
+                        cols = len(table.columns)
+                        cell_w = w // max(cols, 1)
+                        cell_h = h // max(rows, 1)
+
+                        for r_idx, row in enumerate(table.rows):
+                            for c_idx, cell in enumerate(row.cells):
+                                cx = x + c_idx * cell_w
+                                cy = y + r_idx * cell_h
+                                draw.rectangle([cx, cy, cx + cell_w, cy + cell_h], outline=(180, 180, 180))
+                                try:
+                                    font = ImageFont.truetype(font_path, max(int(12 * img_width / 1920 * 1.5), 8))
+                                except:
+                                    font = ImageFont.load_default()
+                                draw.text((cx + 3, cy + 3), cell.text[:50], fill=(0, 0, 0), font=font)
+                    except:
+                        pass
+
+            # Convert PIL image to PDF page
+            img_bytes_io = io.BytesIO()
+            img.save(img_bytes_io, format="PNG")
+            img_bytes_io.seek(0)
+
+            page = pdf_doc.new_page(width=pdf_width, height=pdf_height)
+            page.insert_image(page.rect, stream=img_bytes_io.read())
 
             jobs[job_id]["progress"] = int((i + 1) / total_slides * 100)
 
@@ -2523,8 +2662,8 @@ async def powerpoint_to_pdf(file: UploadFile = File(...)):
             "filename": output_path.name,
             "pages": total_slides
         }
-    except ImportError:
-        raise HTTPException(status_code=500, detail="python-pptx is required for PowerPoint conversion")
+    except ImportError as e:
+        raise HTTPException(status_code=500, detail=f"python-pptx and Pillow are required: {e}")
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
@@ -2824,6 +2963,9 @@ async def text_to_pdf(
         if pdf_doc.page_count == 0:
             pdf_doc.new_page()
 
+        # Get page count before closing document
+        page_count = pdf_doc.page_count
+
         pdf_doc.save(str(output_path))
         pdf_doc.close()
 
@@ -2835,7 +2977,7 @@ async def text_to_pdf(
             "status": "done",
             "download_url": f"/api/download/{output_path.name}",
             "filename": output_path.name,
-            "pages": fitz.open(str(output_path)).page_count
+            "pages": page_count
         }
     except HTTPException:
         raise
@@ -2880,6 +3022,9 @@ async def html_to_pdf(
         rect = page.rect + fitz.Rect(36, 36, -36, -36)  # margins
         page.insert_htmlbox(rect, html_text)
 
+        # Get page count before closing document
+        page_count = doc.page_count
+
         doc.save(str(output_path))
         doc.close()
 
@@ -2891,7 +3036,7 @@ async def html_to_pdf(
             "status": "done",
             "download_url": f"/api/download/{output_path.name}",
             "filename": output_path.name,
-            "pages": fitz.open(str(output_path)).page_count
+            "pages": page_count
         }
     except HTTPException:
         raise
@@ -3269,41 +3414,57 @@ async def watermark_pdf(
             rect = page.rect
 
             if text:
-                positions = {
-                    "center": (rect.width / 2, rect.height / 2),
-                    "top-left": (100, 100),
-                    "top-right": (rect.width - 100, 100),
-                    "bottom-left": (100, rect.height - 100),
-                    "bottom-right": (rect.width - 100, rect.height - 100),
+                positions_map = {
+                    "center": fitz.Point(rect.width / 2, rect.height / 2),
+                    "top-left": fitz.Point(100, 100),
+                    "top-right": fitz.Point(rect.width - 100, 100),
+                    "bottom-left": fitz.Point(100, rect.height - 100),
+                    "bottom-right": fitz.Point(rect.width - 100, rect.height - 100),
                 }
-                pos = positions.get(position, positions["center"])
+                center = positions_map.get(position, positions_map["center"])
 
+                # Create overlay page for transparency support
+                overlay_doc = fitz.open()
+                overlay_page = overlay_doc.new_page(width=rect.width, height=rect.height)
+
+                # Calculate text position centered on the point
                 text_length = fitz.get_text_length(text, fontsize=font_size)
-                text_rect = fitz.Rect(
-                    pos[0] - text_length / 2,
-                    pos[1] - font_size / 2,
-                    pos[0] + text_length / 2,
-                    pos[1] + font_size / 2
+                insert_point = fitz.Point(
+                    center.x - text_length / 2,
+                    center.y + font_size / 3
                 )
 
-                shape = page.new_shape()
-                morph = (fitz.Point(pos[0], pos[1]), fitz.Matrix(rotation))
-                shape.insert_text(
-                    fitz.Point(pos[0] - text_length / 2, pos[1] + font_size / 3),
-                    text,
-                    fontsize=font_size,
-                    color=(0.5, 0.5, 0.5),
-                    morph=morph,
-                    fontfile=UNICODE_FONT_PATH,
-                    fontname="F1"
-                )
-                shape.finish(fill_opacity=opacity)
-                shape.commit()
+                # Apply rotation via morph if needed
+                if rotation != 0:
+                    morph = (center, fitz.Matrix(rotation))
+                    overlay_page.insert_text(
+                        insert_point,
+                        text,
+                        fontsize=font_size,
+                        color=(0.5, 0.5, 0.5),
+                        fontfile=UNICODE_FONT_PATH,
+                        fontname="F1",
+                        morph=morph
+                    )
+                else:
+                    overlay_page.insert_text(
+                        insert_point,
+                        text,
+                        fontsize=font_size,
+                        color=(0.5, 0.5, 0.5),
+                        fontfile=UNICODE_FONT_PATH,
+                        fontname="F1"
+                    )
+
+                # Merge overlay onto original page with opacity
+                page.show_pdf_page(rect, overlay_doc, 0, overlay=(True, None, opacity))
+                overlay_doc.close()
 
             elif watermark_image and watermark_image.filename:
-                watermark_file = save_upload_file(watermark_image)
+                if not watermark_file:
+                    watermark_file = save_upload_file(watermark_image)
                 img_rect = fitz.Rect(0, 0, rect.width, rect.height)
-                page.insert_image(img_rect, filename=str(watermark_file), overlay=True)
+                page.insert_image(img_rect, filename=str(watermark_file), overlay=True, keep_proportion=True)
 
             jobs[job_id]["progress"] = int((idx + 1) / len(page_list) * 100)
 
@@ -3422,13 +3583,18 @@ async def protect_pdf(
     file: UploadFile = File(...),
     user_password: str = Form(...),
     owner_password: str = Form(None),
-    allow_print: bool = Form(True),
-    allow_copy: bool = Form(True),
-    allow_modify: bool = Form(False)
+    allow_print: str = Form("true"),
+    allow_copy: str = Form("true"),
+    allow_modify: str = Form("false")
 ):
     """Add password protection to PDF."""
     job_id = uuid.uuid4().hex[:8]
     jobs[job_id] = {"id": job_id, "status": "processing", "progress": 0, "started_at": time.time()}
+
+    # Parse bool strings from FormData
+    _allow_print = allow_print.lower() in ("true", "1", "yes")
+    _allow_copy = allow_copy.lower() in ("true", "1", "yes")
+    _allow_modify = allow_modify.lower() in ("true", "1", "yes")
 
     saved_file = save_upload_file(file)
     try:
@@ -3437,11 +3603,11 @@ async def protect_pdf(
         owner_pwd = owner_password if owner_password else user_password
 
         permissions = fitz.PDF_PERM_ACCESSIBILITY
-        if allow_print:
+        if _allow_print:
             permissions |= fitz.PDF_PERM_PRINT | fitz.PDF_PERM_PRINT_HQ
-        if allow_copy:
+        if _allow_copy:
             permissions |= fitz.PDF_PERM_COPY
-        if allow_modify:
+        if _allow_modify:
             permissions |= fitz.PDF_PERM_MODIFY | fitz.PDF_PERM_ANNOTATE | fitz.PDF_PERM_FORM
 
         output_path = create_output_path("protected")
@@ -3509,6 +3675,317 @@ async def unlock_pdf(
             "download_url": f"/api/download/{output_path.name}",
             "filename": output_path.name,
             "unlocked": True
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            saved_file.unlink()
+        except:
+            pass
+
+
+# ============================================================================
+# Edit PDF API - Add text annotations
+# ============================================================================
+
+@app.post("/api/edit-pdf")
+async def edit_pdf(
+    file: UploadFile = File(...),
+    text: str = Form(...),
+    page_number: int = Form(1),
+    position_x: float = Form(300),
+    position_y: float = Form(420),
+    font_size: int = Form(14),
+    color: str = Form("0,0,0")
+):
+    """Add text annotation to a specific page of a PDF."""
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {"id": job_id, "status": "processing", "progress": 0, "started_at": time.time()}
+
+    saved_file = save_upload_file(file)
+    try:
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="Text must not be empty")
+
+        doc = fitz.open(str(saved_file))
+        total_pages = doc.page_count
+
+        # Convert 1-based page number to 0-based index
+        page_idx = page_number - 1
+        if page_idx < 0 or page_idx >= total_pages:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Page number {page_number} is out of range. PDF has {total_pages} page(s)."
+            )
+
+        # Parse color from "R,G,B" string (0-255 range)
+        try:
+            color_parts = [int(c.strip()) for c in color.split(",")]
+            if len(color_parts) != 3:
+                raise ValueError
+            text_color = (color_parts[0] / 255.0, color_parts[1] / 255.0, color_parts[2] / 255.0)
+        except (ValueError, IndexError):
+            text_color = (0, 0, 0)
+
+        jobs[job_id]["progress"] = 20
+
+        page = doc[page_idx]
+        point = fitz.Point(position_x, position_y)
+
+        # Insert text using Unicode font for diacritics support
+        page.insert_text(
+            point,
+            text,
+            fontsize=font_size,
+            fontname="helv",
+            fontfile=UNICODE_FONT_PATH,
+            color=text_color,
+        )
+
+        jobs[job_id]["progress"] = 70
+
+        output_path = create_output_path("edited")
+        doc.save(str(output_path), deflate=True, garbage=3)
+        doc.close()
+
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["progress"] = 100
+
+        return {
+            "job_id": job_id,
+            "status": "done",
+            "download_url": f"/api/download/{output_path.name}",
+            "filename": output_path.name,
+            "page_edited": page_number,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            saved_file.unlink()
+        except:
+            pass
+
+
+# ============================================================================
+# Annotate PDF API
+# ============================================================================
+
+@app.post("/api/annotate-pdf")
+async def annotate_pdf(
+    file: UploadFile = File(...),
+    annotation_text: str = Form(...),
+    pages: str = Form("all"),
+    color: str = Form("yellow"),
+):
+    """Search for text in PDF and add highlight annotations."""
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {"id": job_id, "status": "processing", "progress": 0, "started_at": time.time()}
+
+    saved_file = save_upload_file(file)
+    try:
+        doc = fitz.open(str(saved_file))
+        total_pages = doc.page_count
+
+        # Map color names to RGB tuples
+        color_map = {
+            "yellow": (1, 1, 0),
+            "green": (0, 1, 0),
+            "blue": (0, 0.5, 1),
+            "pink": (1, 0.5, 0.75),
+        }
+        highlight_color = color_map.get(color.lower(), (1, 1, 0))
+
+        # Determine which pages to process
+        if pages.strip().lower() == "all":
+            page_indices = list(range(total_pages))
+        else:
+            page_indices = []
+            for part in pages.split(","):
+                part = part.strip()
+                if "-" in part:
+                    start, end = part.split("-", 1)
+                    for p in range(int(start) - 1, min(int(end), total_pages)):
+                        if 0 <= p < total_pages:
+                            page_indices.append(p)
+                else:
+                    p = int(part) - 1
+                    if 0 <= p < total_pages:
+                        page_indices.append(p)
+
+        annotations_added = 0
+        for i, page_idx in enumerate(page_indices):
+            page = doc[page_idx]
+            text_instances = page.search_for(annotation_text)
+            for inst in text_instances:
+                annot = page.add_highlight_annot(inst)
+                annot.set_colors(stroke=highlight_color)
+                annot.update()
+                annotations_added += 1
+            jobs[job_id]["progress"] = int((i + 1) / len(page_indices) * 80)
+
+        output_path = create_output_path("annotated")
+        doc.save(str(output_path), deflate=True, garbage=3)
+        doc.close()
+
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["progress"] = 100
+
+        return {
+            "job_id": job_id,
+            "status": "done",
+            "download_url": f"/api/download/{output_path.name}",
+            "filename": output_path.name,
+            "annotations_added": annotations_added,
+        }
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            saved_file.unlink()
+        except:
+            pass
+
+
+# ============================================================================
+# Redact PDF API
+# ============================================================================
+
+@app.post("/api/redact-pdf")
+async def redact_pdf(
+    file: UploadFile = File(...),
+    redact_text: str = Form(...),
+    pages: str = Form("all"),
+):
+    """Search for text in PDF and permanently redact (black out) it."""
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {"id": job_id, "status": "processing", "progress": 0, "started_at": time.time()}
+
+    saved_file = save_upload_file(file)
+    try:
+        doc = fitz.open(str(saved_file))
+        total_pages = doc.page_count
+
+        # Determine which pages to process
+        if pages.strip().lower() == "all":
+            page_indices = list(range(total_pages))
+        else:
+            page_indices = []
+            for part in pages.split(","):
+                part = part.strip()
+                if "-" in part:
+                    start, end = part.split("-", 1)
+                    for p in range(int(start) - 1, min(int(end), total_pages)):
+                        if 0 <= p < total_pages:
+                            page_indices.append(p)
+                else:
+                    p = int(part) - 1
+                    if 0 <= p < total_pages:
+                        page_indices.append(p)
+
+        redactions_applied = 0
+        for i, page_idx in enumerate(page_indices):
+            page = doc[page_idx]
+            text_instances = page.search_for(redact_text)
+            for inst in text_instances:
+                page.add_redact_annot(inst, fill=(0, 0, 0))
+                redactions_applied += 1
+            page.apply_redactions()
+            jobs[job_id]["progress"] = int((i + 1) / len(page_indices) * 80)
+
+        output_path = create_output_path("redacted")
+        doc.save(str(output_path), deflate=True, garbage=3)
+        doc.close()
+
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["progress"] = 100
+
+        return {
+            "job_id": job_id,
+            "status": "done",
+            "download_url": f"/api/download/{output_path.name}",
+            "filename": output_path.name,
+            "redactions_applied": redactions_applied,
+        }
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            saved_file.unlink()
+        except:
+            pass
+
+
+# ============================================================================
+# Organize PDF API
+# ============================================================================
+
+@app.post("/api/organize-pdf")
+async def organize_pdf(
+    file: UploadFile = File(...),
+    page_order: str = Form(""),
+    reverse: bool = Form(False),
+):
+    """Reorder or reverse pages in a PDF document."""
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {"id": job_id, "status": "processing", "progress": 0, "started_at": time.time()}
+
+    saved_file = save_upload_file(file)
+    try:
+        doc = fitz.open(str(saved_file))
+        total_pages = doc.page_count
+
+        if reverse:
+            # Reverse all pages
+            new_order = list(range(total_pages - 1, -1, -1))
+        elif page_order.strip():
+            # Parse custom page order (1-based input, convert to 0-based)
+            new_order = []
+            for part in page_order.split(","):
+                part = part.strip()
+                if part:
+                    p = int(part) - 1
+                    if p < 0 or p >= total_pages:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid page number {int(part)}. PDF has {total_pages} pages."
+                        )
+                    new_order.append(p)
+            if not new_order:
+                raise HTTPException(status_code=400, detail="No valid page numbers provided")
+        else:
+            raise HTTPException(status_code=400, detail="Please provide a page order or set reverse to true")
+
+        jobs[job_id]["progress"] = 50
+
+        doc.select(new_order)
+
+        output_path = create_output_path("organized")
+        doc.save(str(output_path), deflate=True, garbage=3)
+        doc.close()
+
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["progress"] = 100
+
+        return {
+            "job_id": job_id,
+            "status": "done",
+            "download_url": f"/api/download/{output_path.name}",
+            "filename": output_path.name,
+            "total_pages": len(new_order),
         }
     except HTTPException:
         raise
@@ -3647,13 +4124,18 @@ async def split_by_text(
         split_points = []
         for i in range(total_pages):
             page = doc[i]
-            mat = fitz.Matrix(dpi / 72, dpi / 72)
-            pix = page.get_pixmap(matrix=mat)
-            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+            # Try native text first (faster, preserves diacritics)
+            full_text = page.get_text("text")
 
-            result, _ = ocr(img)
-            texts = [r[1] for r in result] if result else []
-            full_text = ' '.join(texts)
+            # Fallback to OCR only if page has very little native text (scanned)
+            if len(full_text.strip()) < 10:
+                mat = fitz.Matrix(dpi / 72, dpi / 72)
+                pix = page.get_pixmap(matrix=mat)
+                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+
+                result, _ = ocr(img)
+                texts = [r[1] for r in result] if result else []
+                full_text = ' '.join(texts)
 
             if re.search(pattern, full_text, re.IGNORECASE):
                 split_points.append(i)
@@ -3748,13 +4230,18 @@ async def split_invoices(
         page_invoices = []
         for i in range(total_pages):
             page = doc[i]
-            mat = fitz.Matrix(dpi / 72, dpi / 72)
-            pix = page.get_pixmap(matrix=mat)
-            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+            # Try native text first (faster, preserves diacritics)
+            full_text = page.get_text("text")
 
-            result, _ = ocr(img)
-            texts = [r[1] for r in result] if result else []
-            full_text = ' '.join(texts)
+            # Fallback to OCR only if page has very little native text (scanned)
+            if len(full_text.strip()) < 10:
+                mat = fitz.Matrix(dpi / 72, dpi / 72)
+                pix = page.get_pixmap(matrix=mat)
+                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+
+                result, _ = ocr(img)
+                texts = [r[1] for r in result] if result else []
+                full_text = ' '.join(texts)
 
             match = re.search(invoice_pattern, full_text, re.IGNORECASE)
             invoice_num = match.group(1) if match else None
@@ -4167,9 +4654,11 @@ async def extract_text_ocr(
         extracted_data = []
         for idx, page_num in enumerate(page_list):
             page = doc[page_num]
-            text = page.get_text()
+            # Always try native text extraction first (preserves diacritics perfectly)
+            text = page.get_text("text")
 
-            if len(text.strip()) < 50:
+            # Only use OCR if native text is truly empty (scanned PDF)
+            if len(text.strip()) < 10:
                 mat = fitz.Matrix(dpi / 72, dpi / 72)
                 pix = page.get_pixmap(matrix=mat)
                 img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
@@ -4218,6 +4707,114 @@ async def extract_text_ocr(
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            saved_file.unlink()
+        except:
+            pass
+
+
+# ============================================================================
+# Sign PDF API
+# ============================================================================
+
+@app.post("/api/sign-pdf")
+async def sign_pdf(
+    file: UploadFile = File(...),
+    signature_text: str = Form(...),
+    position: str = Form("bottom-right"),
+    page: str = Form("all"),
+    font_size: int = Form(14),
+    opacity: float = Form(1.0)
+):
+    """Add text signature to PDF pages."""
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {"id": job_id, "status": "processing", "progress": 0, "started_at": time.time()}
+
+    saved_file = save_upload_file(file)
+    try:
+        if not signature_text.strip():
+            raise HTTPException(status_code=400, detail="Signature text is required")
+
+        doc = fitz.open(str(saved_file))
+        total_pages = doc.page_count
+
+        # Parse page selection
+        if page == "all":
+            page_list = list(range(total_pages))
+        else:
+            page_list = []
+            for part in page.split(","):
+                part = part.strip()
+                if "-" in part:
+                    start, end = map(int, part.split("-"))
+                    page_list.extend(range(start - 1, end))
+                else:
+                    page_list.append(int(part) - 1)
+            page_list = [p for p in page_list if 0 <= p < total_pages]
+
+        position_map = {
+            "top-left": (0.05, 0.07),
+            "top-right": (0.60, 0.07),
+            "bottom-left": (0.05, 0.95),
+            "bottom-right": (0.60, 0.95),
+            "center": (0.35, 0.50)
+        }
+        pos_x, pos_y = position_map.get(position, position_map["bottom-right"])
+
+        for idx, page_num in enumerate(page_list):
+            if 0 <= page_num < total_pages:
+                pg = doc[page_num]
+                rect = pg.rect
+                x = rect.width * pos_x
+                y = rect.height * pos_y
+
+                # Use overlay for opacity support
+                if opacity < 1.0:
+                    overlay_doc = fitz.open()
+                    overlay_page = overlay_doc.new_page(width=rect.width, height=rect.height)
+                    overlay_page.insert_text(
+                        (x, y), signature_text,
+                        fontsize=font_size,
+                        color=(0, 0, 0.4),
+                        fontfile=UNICODE_FONT_PATH,
+                        fontname="F1",
+                        overlay=True
+                    )
+                    pg.show_pdf_page(rect, overlay_doc, 0, overlay=(True, None, opacity))
+                    overlay_doc.close()
+                else:
+                    pg.insert_text(
+                        (x, y), signature_text,
+                        fontsize=font_size,
+                        color=(0, 0, 0.4),
+                        fontfile=UNICODE_FONT_PATH,
+                        fontname="F1",
+                        overlay=True
+                    )
+
+            jobs[job_id]["progress"] = int((idx + 1) / len(page_list) * 100)
+
+        output_path = create_output_path("signed")
+        doc.save(str(output_path))
+        doc.close()
+
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["progress"] = 100
+
+        return {
+            "job_id": job_id,
+            "status": "done",
+            "download_url": f"/api/download/{output_path.name}",
+            "filename": output_path.name,
+            "pages_signed": len(page_list)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        raise HTTPException(status_code=500, detail=f"Signature failed: {str(e)}")
     finally:
         try:
             saved_file.unlink()
