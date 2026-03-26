@@ -35,14 +35,14 @@ const PATTERN_PRESETS = [
   {
     id: "order_8",
     label: "Order number + 8 digits",
-    description: "Ex: Order No: 72544251",
-    pattern: "(?:Order\\s*(?:No\\.?|#|:)?\\s*)(\\d{8})",
+    description: "Ex: Order No: 72544251 / Nr.comanda: 72544251",
+    pattern: "(?:(?:Order|Nr\\.?\\s*c[o0]manda)\\s*(?:No\\.?|#|:)?\\s*:?\\s*)(\\d{8})",
   },
   {
     id: "order_any",
     label: "Order number + any digits",
-    description: "Ex: Order No: 123, Order #999999",
-    pattern: "(?:Order\\s*(?:No\\.?|#|:)?\\s*)(\\d{3,12})",
+    description: "Ex: Order No: 123, Nr.comanda: 999999",
+    pattern: "(?:(?:Order|Nr\\.?\\s*c[o0]manda)\\s*(?:No\\.?|#|:)?\\s*:?\\s*)(\\d{3,12})",
   },
   {
     id: "any_8_digits",
