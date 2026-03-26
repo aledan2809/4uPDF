@@ -569,7 +569,10 @@ def extract_order_from_page(page, ocr, pattern, crop_left=0.5, crop_top=0.0, cro
     full_text = ' '.join(texts)
 
     match = re.search(pattern, full_text, re.IGNORECASE)
-    order_num = match.group(1) if match.lastindex else match.group(0) if match else None
+    if match:
+        order_num = match.group(1) if match.lastindex else match.group(0)
+    else:
+        order_num = None
 
     return order_num, full_text
 
