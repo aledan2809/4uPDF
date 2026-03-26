@@ -6,6 +6,7 @@ User authentication, subscriptions, and usage tracking
 
 import fitz
 import numpy as np
+from PIL import Image
 import re
 import os
 import json
@@ -531,19 +532,44 @@ def get_ocr():
 
 
 def extract_order_from_page(page, ocr, pattern, crop_left=0.5, crop_top=0.0, crop_right=1.0, crop_bottom=0.2, dpi=150):
-    """OCR the specified region of a PDF page and extract order number."""
-    pw, ph = page.rect.width, page.rect.height
-    clip = fitz.Rect(pw * crop_left, ph * crop_top, pw * crop_right, ph * crop_bottom)
-    mat = fitz.Matrix(dpi / 72, dpi / 72)
-    pix = page.get_pixmap(matrix=mat, clip=clip)
-    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+    """OCR the specified region of a PDF page and extract order number.
 
-    result, _ = ocr(img)
+    Renders the full page at the given DPI, then crops with PIL for better
+    OCR context (matching the original split_pdf.py approach).
+    Also tries native PDF text extraction first (faster, more accurate for
+    non-scanned PDFs), falling back to OCR only when needed.
+    """
+    pw, ph = page.rect.width, page.rect.height
+
+    # --- Try native text extraction first (fast path for non-scanned PDFs) ---
+    clip = fitz.Rect(pw * crop_left, ph * crop_top, pw * crop_right, ph * crop_bottom)
+    native_text = page.get_text("text", clip=clip).strip()
+    if native_text and len(native_text) > 5:
+        match = re.search(pattern, native_text, re.IGNORECASE)
+        if match:
+            order_num = match.group(1) if match.lastindex else match.group(0)
+            return order_num, native_text
+
+    # --- OCR fallback: render full page then crop with PIL (better quality) ---
+    mat = fitz.Matrix(dpi / 72, dpi / 72)
+    pix = page.get_pixmap(matrix=mat)
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+    # Crop to the specified region
+    w, h = img.size
+    left = int(w * crop_left)
+    top = int(h * crop_top)
+    right = int(w * crop_right)
+    bottom = int(h * crop_bottom)
+    cropped = img.crop((left, top, right, bottom))
+    img_array = np.array(cropped)
+
+    result, _ = ocr(img_array)
     texts = [r[1] for r in result] if result else []
     full_text = ' '.join(texts)
 
     match = re.search(pattern, full_text, re.IGNORECASE)
-    order_num = match.group(1) if match else None
+    order_num = match.group(1) if match.lastindex else match.group(0) if match else None
 
     return order_num, full_text
 
