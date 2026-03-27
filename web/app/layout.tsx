@@ -113,6 +113,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="bg-gray-950 text-gray-100 min-h-screen antialiased">
         <AuthProvider>{children}</AuthProvider>
         <CookieConsent />
+        <Script id="heartbeat" strategy="afterInteractive">
+          {`
+            (function(){
+              var API = "${process.env.NEXT_PUBLIC_API_URL || ""}";
+              if(!API) return;
+              function beat(){fetch(API+"/api/heartbeat",{method:"POST"}).catch(function(){});}
+              beat();
+              setInterval(beat, 60000);
+            })();
+          `}
+        </Script>
       </body>
     </html>
   );

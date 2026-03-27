@@ -4,6 +4,7 @@ PDF tools: merge, split, compress, convert, OCR
 User authentication, subscriptions, and usage tracking
 """
 
+import asyncio
 import fitz
 import numpy as np
 import re
@@ -83,6 +84,12 @@ security = HTTPBearer(auto_error=False)
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", secrets.token_hex(32))
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 24 * 7  # 7 days
+
+# SuperAdmin key from environment
+SUPER_ADMIN_KEY = os.environ.get("SUPER_ADMIN_KEY", "")
+
+# In-memory heartbeat tracking for real-time active users
+_active_users: Dict[str, float] = {}  # ip -> last_heartbeat_timestamp
 
 # ============================================================================
 # Database Configuration
@@ -203,6 +210,31 @@ def init_database():
             )
         """)
 
+        # Analytics events table for local analytics tracking
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS analytics_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                page TEXT,
+                user_id TEXT,
+                ip TEXT,
+                user_agent TEXT,
+                referrer TEXT,
+                country TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Add last_active and is_banned columns to users (safe ALTER)
+        for col, col_def in [
+            ("last_active", "TIMESTAMP"),
+            ("is_banned", "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
+            except Exception:
+                pass  # Column already exists
+
         # Create indexes
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_anonymous_composite ON anonymous_usage(composite_hash)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_anonymous_ip ON anonymous_usage(ip_address)")
@@ -210,6 +242,9 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_vouchers_code ON vouchers(code)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_history(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_usage_anon ON usage_history(anonymous_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_timestamp ON analytics_events(timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_event_type ON analytics_events(event_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_page ON analytics_events(page)")
 
         # Insert default settings if not exist
         default_settings = {
@@ -223,6 +258,9 @@ def init_database():
             "silver_annual_price_id": "",
             "gold_monthly_price_id": "",
             "gold_annual_price_id": "",
+            "rate_limit": "100",
+            "max_file_size_mb": "500",
+            "maintenance_mode": "false",
         }
 
         for key, value in default_settings.items():
@@ -384,6 +422,16 @@ def get_client_ip(request: Request) -> str:
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
+
+def verify_superadmin(admin_key: str):
+    """Verify superadmin key from env or DB setting."""
+    if SUPER_ADMIN_KEY and admin_key == SUPER_ADMIN_KEY:
+        return True
+    stored_key = get_setting("admin_api_key", "")
+    if stored_key and admin_key == stored_key:
+        return True
+    raise HTTPException(status_code=403, detail="Invalid admin key")
+
 
 def get_user_plan_limits(user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Get plan limits for a user (or free limits if no user)."""
@@ -1043,18 +1091,19 @@ async def redeem_voucher(
 # Admin endpoint for creating vouchers
 @app.post("/api/admin/vouchers")
 async def create_voucher(
+    request: Request,
     code: str = Form(...),
     target_plan: str = Form(...),
     duration_days: int = Form(...),
     max_uses: int = Form(1),
     expires_at: str = Form(None),
-    admin_key: str = Form(...)
+    admin_key: str = Form(None),
 ):
     """Create a new voucher (admin only)."""
-    # Simple admin key check - in production, use proper admin auth
-    stored_admin_key = get_setting("admin_api_key", "")
-    if not stored_admin_key or admin_key != stored_admin_key:
-        raise HTTPException(status_code=403, detail="Invalid admin key")
+    if admin_key:
+        verify_superadmin(admin_key)
+    else:
+        _require_superadmin(request)
 
     if target_plan not in PLAN_LIMITS:
         raise HTTPException(status_code=400, detail=f"Invalid plan: {target_plan}")
@@ -1086,11 +1135,12 @@ async def create_voucher(
 
 
 @app.get("/api/admin/vouchers")
-async def list_vouchers(admin_key: str):
+async def list_vouchers(request: Request, admin_key: str = None):
     """List all vouchers (admin only)."""
-    stored_admin_key = get_setting("admin_api_key", "")
-    if not stored_admin_key or admin_key != stored_admin_key:
-        raise HTTPException(status_code=403, detail="Invalid admin key")
+    if admin_key:
+        verify_superadmin(admin_key)
+    else:
+        _require_superadmin(request)
 
     with db_session() as conn:
         cursor = conn.cursor()
@@ -1296,28 +1346,80 @@ async def create_customer_portal(user: Dict[str, Any] = Depends(get_current_user
 
 
 # ============================================================================
+# SuperAdmin Authentication
+# ============================================================================
+
+@app.post("/api/superadmin/login")
+async def superadmin_login(admin_key: str = Form(...)):
+    """Authenticate superadmin with SUPER_ADMIN_KEY."""
+    verify_superadmin(admin_key)
+    # Return a signed token for session persistence
+    payload = {
+        "role": "superadmin",
+        "exp": datetime.utcnow() + timedelta(hours=24),
+        "iat": datetime.utcnow(),
+    }
+    secret = get_setting("jwt_secret_key", JWT_SECRET_KEY)
+    token = jwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
+    return {"success": True, "token": token}
+
+
+@app.get("/api/superadmin/verify")
+async def superadmin_verify(request: Request):
+    """Verify superadmin session token."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="No token")
+    token = auth.split(" ", 1)[1]
+    try:
+        secret = get_setting("jwt_secret_key", JWT_SECRET_KEY)
+        payload = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+        if payload.get("role") != "superadmin":
+            raise HTTPException(status_code=403, detail="Not superadmin")
+        return {"valid": True}
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def _require_superadmin(request: Request):
+    """Dependency: require superadmin JWT in Authorization header."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    token = auth.split(" ", 1)[1]
+    try:
+        secret = get_setting("jwt_secret_key", JWT_SECRET_KEY)
+        payload = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+        if payload.get("role") != "superadmin":
+            raise HTTPException(status_code=403, detail="Not superadmin")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+# ============================================================================
 # Admin Settings API
 # ============================================================================
 
 @app.get("/api/admin/settings")
-async def get_admin_settings(admin_key: str):
+async def get_admin_settings(request: Request, admin_key: str = None):
     """Get admin settings (admin only)."""
-    stored_admin_key = get_setting("admin_api_key", "")
-    if not stored_admin_key or admin_key != stored_admin_key:
-        raise HTTPException(status_code=403, detail="Invalid admin key")
+    if admin_key:
+        verify_superadmin(admin_key)
+    else:
+        _require_superadmin(request)
 
     settings_keys = [
         "stripe_secret_key", "stripe_publishable_key", "stripe_webhook_secret",
         "jwt_secret_key", "admin_api_key",
         "bronze_monthly_price_id", "bronze_annual_price_id",
         "silver_monthly_price_id", "silver_annual_price_id",
-        "gold_monthly_price_id", "gold_annual_price_id"
+        "gold_monthly_price_id", "gold_annual_price_id",
+        "rate_limit", "max_file_size_mb", "maintenance_mode",
     ]
 
     settings = {}
     for key in settings_keys:
         value = get_setting(key, "")
-        # Mask sensitive values
         if "secret" in key.lower() or "key" in key.lower():
             if value:
                 settings[key] = value[:8] + "..." + value[-4:] if len(value) > 12 else "***"
@@ -1330,13 +1432,9 @@ async def get_admin_settings(admin_key: str):
 
 
 @app.post("/api/admin/settings")
-async def update_admin_settings(request: Request, admin_key: str = Form(...)):
+async def update_admin_settings(request: Request):
     """Update admin settings (admin only)."""
-    stored_admin_key = get_setting("admin_api_key", "")
-
-    # Allow setting admin key if not set
-    if stored_admin_key and admin_key != stored_admin_key:
-        raise HTTPException(status_code=403, detail="Invalid admin key")
+    _require_superadmin(request)
 
     form_data = await request.form()
 
@@ -1345,15 +1443,16 @@ async def update_admin_settings(request: Request, admin_key: str = Form(...)):
         "jwt_secret_key", "admin_api_key",
         "bronze_monthly_price_id", "bronze_annual_price_id",
         "silver_monthly_price_id", "silver_annual_price_id",
-        "gold_monthly_price_id", "gold_annual_price_id"
+        "gold_monthly_price_id", "gold_annual_price_id",
+        "rate_limit", "max_file_size_mb", "maintenance_mode",
     ]
 
     updated = []
     for key in allowed_keys:
         if key in form_data:
             value = form_data[key]
-            if value:  # Only update if value provided
-                set_setting(key, value)
+            if value is not None:
+                set_setting(key, str(value))
                 updated.append(key)
 
     return {"success": True, "updated": updated}
@@ -1364,40 +1463,91 @@ async def update_admin_settings(request: Request, admin_key: str = Form(...)):
 # ============================================================================
 
 @app.get("/api/admin/users")
-async def list_users(admin_key: str, limit: int = 50, offset: int = 0):
-    """List users (admin only)."""
-    stored_admin_key = get_setting("admin_api_key", "")
-    if not stored_admin_key or admin_key != stored_admin_key:
-        raise HTTPException(status_code=403, detail="Invalid admin key")
+async def list_users(
+    request: Request,
+    admin_key: str = None,
+    limit: int = 50,
+    offset: int = 0,
+    search: str = None,
+    plan_filter: str = None,
+    sort_by: str = "created_at",
+    sort_dir: str = "desc",
+):
+    """List users (admin only) with search, filter, sort."""
+    if admin_key:
+        verify_superadmin(admin_key)
+    else:
+        _require_superadmin(request)
+
+    allowed_sort = {"created_at", "last_active", "email", "plan"}
+    if sort_by not in allowed_sort:
+        sort_by = "created_at"
+    if sort_dir not in ("asc", "desc"):
+        sort_dir = "desc"
 
     with db_session() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, email, plan, base_plan, subscription_status, created_at
+
+        where_clauses = []
+        params: list = []
+
+        if search:
+            where_clauses.append("email LIKE ?")
+            params.append(f"%{search}%")
+        if plan_filter:
+            where_clauses.append("plan = ?")
+            params.append(plan_filter)
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        cursor.execute(f"""
+            SELECT id, email, plan, base_plan, subscription_status,
+                   created_at, updated_at, last_active, is_banned
             FROM users
-            ORDER BY created_at DESC
+            {where_sql}
+            ORDER BY {sort_by} {sort_dir}
             LIMIT ? OFFSET ?
-        """, (limit, offset))
+        """, params + [limit, offset])
         users = [dict(row) for row in cursor.fetchall()]
 
-        cursor.execute("SELECT COUNT(*) as count FROM users")
+        cursor.execute(f"SELECT COUNT(*) as count FROM users {where_sql}", params)
         total = cursor.fetchone()["count"]
 
     return {"users": users, "total": total}
 
 
+@app.post("/api/admin/users/{user_id}/ban")
+async def toggle_ban_user(user_id: str, request: Request):
+    """Toggle ban/unban for a user."""
+    _require_superadmin(request)
+
+    with db_session() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, is_banned FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+        new_status = 0 if row["is_banned"] else 1
+        cursor.execute("UPDATE users SET is_banned = ?, updated_at = ? WHERE id = ?",
+                        (new_status, datetime.utcnow().isoformat(), user_id))
+
+    return {"success": True, "is_banned": bool(new_status)}
+
+
 @app.post("/api/admin/users/{user_id}/plan")
 async def update_user_plan(
     user_id: str,
+    request: Request,
     plan: str = Form(...),
     custom_max_file_size_mb: int = Form(None),
     custom_pages_per_day: int = Form(None),
-    admin_key: str = Form(...)
+    admin_key: str = Form(None),
 ):
-    """Update user plan (admin only). Used for custom plans."""
-    stored_admin_key = get_setting("admin_api_key", "")
-    if not stored_admin_key or admin_key != stored_admin_key:
-        raise HTTPException(status_code=403, detail="Invalid admin key")
+    """Update user plan (admin only)."""
+    if admin_key:
+        verify_superadmin(admin_key)
+    else:
+        _require_superadmin(request)
 
     if plan not in PLAN_LIMITS:
         raise HTTPException(status_code=400, detail=f"Invalid plan: {plan}")
@@ -1417,6 +1567,281 @@ async def update_user_plan(
               datetime.utcnow().isoformat(), user_id))
 
     return {"success": True}
+
+
+# ============================================================================
+# Admin Voucher Management (enhanced CRUD)
+# ============================================================================
+
+@app.put("/api/admin/vouchers/{voucher_id}")
+async def update_voucher(voucher_id: str, request: Request):
+    """Update a voucher (toggle active, change fields)."""
+    _require_superadmin(request)
+    form_data = await request.form()
+
+    with db_session() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM vouchers WHERE id = ?", (voucher_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Voucher not found")
+
+        updates = []
+        params = []
+        for field in ["is_active", "max_uses", "expires_at", "target_plan", "duration_days"]:
+            if field in form_data:
+                updates.append(f"{field} = ?")
+                params.append(form_data[field])
+
+        if updates:
+            params.append(voucher_id)
+            cursor.execute(f"UPDATE vouchers SET {', '.join(updates)} WHERE id = ?", params)
+
+    return {"success": True}
+
+
+@app.delete("/api/admin/vouchers/{voucher_id}")
+async def delete_voucher(voucher_id: str, request: Request):
+    """Delete a voucher."""
+    _require_superadmin(request)
+
+    with db_session() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM vouchers WHERE id = ?", (voucher_id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Voucher not found")
+
+    return {"success": True}
+
+
+# ============================================================================
+# Admin Stats & Real-time Active Users (SSE)
+# ============================================================================
+
+@app.get("/api/admin/stats")
+async def get_admin_stats(request: Request):
+    """Get admin dashboard stats."""
+    _require_superadmin(request)
+
+    with db_session() as conn:
+        cursor = conn.cursor()
+
+        # Total users
+        cursor.execute("SELECT COUNT(*) as c FROM users")
+        total_users = cursor.fetchone()["c"]
+
+        # Users by plan
+        cursor.execute("SELECT plan, COUNT(*) as c FROM users GROUP BY plan")
+        users_by_plan = {row["plan"]: row["c"] for row in cursor.fetchall()}
+
+        # Total uploads/operations
+        cursor.execute("SELECT COUNT(*) as c FROM usage_history")
+        total_operations = cursor.fetchone()["c"]
+
+        # Operations per tool
+        cursor.execute("""
+            SELECT operation, COUNT(*) as c
+            FROM usage_history
+            GROUP BY operation
+            ORDER BY c DESC
+        """)
+        operations_by_tool = {row["operation"]: row["c"] for row in cursor.fetchall()}
+
+        # Operations last 30 days (daily)
+        cursor.execute("""
+            SELECT DATE(created_at) as day, COUNT(*) as c
+            FROM usage_history
+            WHERE created_at >= DATE('now', '-30 days')
+            GROUP BY DATE(created_at)
+            ORDER BY day
+        """)
+        daily_operations = [{"date": row["day"], "count": row["c"]} for row in cursor.fetchall()]
+
+        # New users last 30 days (daily)
+        cursor.execute("""
+            SELECT DATE(created_at) as day, COUNT(*) as c
+            FROM users
+            WHERE created_at >= DATE('now', '-30 days')
+            GROUP BY DATE(created_at)
+            ORDER BY day
+        """)
+        daily_new_users = [{"date": row["day"], "count": row["c"]} for row in cursor.fetchall()]
+
+        # Active users (heartbeat within last 5 min)
+        now = time.time()
+        active_count = sum(1 for t in _active_users.values() if now - t < 300)
+
+    return {
+        "total_users": total_users,
+        "users_by_plan": users_by_plan,
+        "total_operations": total_operations,
+        "operations_by_tool": operations_by_tool,
+        "daily_operations": daily_operations,
+        "daily_new_users": daily_new_users,
+        "active_users_now": active_count,
+    }
+
+
+@app.post("/api/heartbeat")
+async def heartbeat(request: Request):
+    """Track active users via heartbeat."""
+    ip = get_client_ip(request)
+    _active_users[ip] = time.time()
+    return {"ok": True}
+
+
+@app.get("/api/admin/active-users")
+async def sse_active_users(request: Request):
+    """SSE endpoint for real-time active user count."""
+    _require_superadmin(request)
+
+    async def event_generator():
+        while True:
+            now = time.time()
+            count = sum(1 for t in _active_users.values() if now - t < 300)
+            yield f"data: {json.dumps({'active_users': count, 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+            await asyncio.sleep(5)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream",
+                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ============================================================================
+# Analytics Tracking & Dashboard API
+# ============================================================================
+
+@app.middleware("http")
+async def analytics_middleware(request: Request, call_next):
+    """Track page views and API calls for local analytics."""
+    response = await call_next(request)
+
+    # Only track GET requests to pages (not API calls or static files)
+    path = request.url.path
+    if (request.method == "GET"
+        and not path.startswith("/api/")
+        and not path.startswith("/_next/")
+        and not path.startswith("/static/")
+        and not path.endswith((".js", ".css", ".ico", ".png", ".jpg", ".svg", ".woff2"))):
+        try:
+            ip = get_client_ip(request)
+            user_agent = request.headers.get("user-agent", "")
+            referrer = request.headers.get("referer", "")
+
+            with db_session() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO analytics_events (id, event_type, page, ip, user_agent, referrer, timestamp)
+                    VALUES (?, 'pageview', ?, ?, ?, ?, ?)
+                """, (uuid.uuid4().hex, path, ip, user_agent, referrer,
+                      datetime.utcnow().isoformat()))
+        except Exception:
+            pass  # Don't break the request on analytics failure
+
+    # Update last_active for authenticated users
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            token = auth.split(" ", 1)[1]
+            payload = decode_jwt_token(token)
+            if payload and payload.get("sub"):
+                with db_session() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE users SET last_active = ? WHERE id = ?",
+                                    (datetime.utcnow().isoformat(), payload["sub"]))
+        except Exception:
+            pass
+
+    return response
+
+
+@app.post("/api/analytics/track")
+async def track_analytics_event(
+    request: Request,
+    event_type: str = Form(...),
+    page: str = Form(None),
+):
+    """Track custom analytics events from frontend."""
+    ip = get_client_ip(request)
+    user_agent = request.headers.get("user-agent", "")
+
+    with db_session() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO analytics_events (id, event_type, page, ip, user_agent, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (uuid.uuid4().hex, event_type, page, ip, user_agent,
+              datetime.utcnow().isoformat()))
+
+    return {"success": True}
+
+
+@app.get("/api/admin/analytics")
+async def get_admin_analytics(
+    request: Request,
+    period: str = "30d",
+):
+    """Get local analytics data (page views, unique visitors, top pages)."""
+    _require_superadmin(request)
+
+    period_map = {"7d": 7, "30d": 30, "90d": 90, "365d": 365}
+    days = period_map.get(period, 30)
+
+    with db_session() as conn:
+        cursor = conn.cursor()
+
+        # Total page views in period
+        cursor.execute("""
+            SELECT COUNT(*) as c FROM analytics_events
+            WHERE event_type = 'pageview' AND timestamp >= DATE('now', ?)
+        """, (f"-{days} days",))
+        total_pageviews = cursor.fetchone()["c"]
+
+        # Unique visitors (by IP) in period
+        cursor.execute("""
+            SELECT COUNT(DISTINCT ip) as c FROM analytics_events
+            WHERE event_type = 'pageview' AND timestamp >= DATE('now', ?)
+        """, (f"-{days} days",))
+        unique_visitors = cursor.fetchone()["c"]
+
+        # Top pages
+        cursor.execute("""
+            SELECT page, COUNT(*) as views, COUNT(DISTINCT ip) as visitors
+            FROM analytics_events
+            WHERE event_type = 'pageview' AND timestamp >= DATE('now', ?)
+            GROUP BY page
+            ORDER BY views DESC
+            LIMIT 20
+        """, (f"-{days} days",))
+        top_pages = [dict(row) for row in cursor.fetchall()]
+
+        # Daily pageviews
+        cursor.execute("""
+            SELECT DATE(timestamp) as day, COUNT(*) as views, COUNT(DISTINCT ip) as visitors
+            FROM analytics_events
+            WHERE event_type = 'pageview' AND timestamp >= DATE('now', ?)
+            GROUP BY DATE(timestamp)
+            ORDER BY day
+        """, (f"-{days} days",))
+        daily_stats = [dict(row) for row in cursor.fetchall()]
+
+        # Top referrers
+        cursor.execute("""
+            SELECT referrer, COUNT(*) as c
+            FROM analytics_events
+            WHERE event_type = 'pageview' AND referrer != '' AND timestamp >= DATE('now', ?)
+            GROUP BY referrer
+            ORDER BY c DESC
+            LIMIT 10
+        """, (f"-{days} days",))
+        top_referrers = [dict(row) for row in cursor.fetchall()]
+
+    return {
+        "total_pageviews": total_pageviews,
+        "unique_visitors": unique_visitors,
+        "top_pages": top_pages,
+        "daily_stats": daily_stats,
+        "top_referrers": top_referrers,
+        "period": period,
+    }
 
 
 @app.post("/api/split-ocr")
