@@ -5,9 +5,7 @@ import Script from "next/script";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3099";
 
-function authHeaders() {
-  return { Authorization: `Bearer ${localStorage.getItem("superadmin_token") || ""}` };
-}
+const fetchOpts: RequestInit = { credentials: "include" };
 
 interface AnalyticsData {
   total_pageviews: number;
@@ -28,7 +26,7 @@ export default function AnalyticsPage() {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API_URL}/api/admin/analytics?period=${period}`, { headers: authHeaders() })
+    fetch(`${API_URL}/api/admin/analytics?period=${period}`, fetchOpts)
       .then((r) => r.json())
       .then(setData)
       .catch(console.error)

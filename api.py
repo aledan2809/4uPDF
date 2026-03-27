@@ -85,8 +85,12 @@ JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", secrets.token_hex(32))
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 24 * 7  # 7 days
 
-# SuperAdmin key from environment
+# SuperAdmin key from environment (deprecated - kept for backward compat only)
 SUPER_ADMIN_KEY = os.environ.get("SUPER_ADMIN_KEY", "")
+
+# Import and include superadmin auth router (email/password based)
+from routes.superadmin import router as superadmin_router, init_superadmin_routes
+app.include_router(superadmin_router)
 
 # In-memory heartbeat tracking for real-time active users
 _active_users: Dict[str, float] = {}  # ip -> last_heartbeat_timestamp
@@ -225,10 +229,11 @@ def init_database():
             )
         """)
 
-        # Add last_active and is_banned columns to users (safe ALTER)
+        # Add last_active, is_banned, and role columns to users (safe ALTER)
         for col, col_def in [
             ("last_active", "TIMESTAMP"),
             ("is_banned", "INTEGER DEFAULT 0"),
+            ("role", "TEXT DEFAULT 'user'"),
         ]:
             try:
                 cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
@@ -1349,44 +1354,18 @@ async def create_customer_portal(user: Dict[str, Any] = Depends(get_current_user
 # SuperAdmin Authentication
 # ============================================================================
 
-@app.post("/api/superadmin/login")
-async def superadmin_login(admin_key: str = Form(...)):
-    """Authenticate superadmin with SUPER_ADMIN_KEY."""
-    verify_superadmin(admin_key)
-    # Return a signed token for session persistence
-    payload = {
-        "role": "superadmin",
-        "exp": datetime.utcnow() + timedelta(hours=24),
-        "iat": datetime.utcnow(),
-    }
-    secret = get_setting("jwt_secret_key", JWT_SECRET_KEY)
-    token = jwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
-    return {"success": True, "token": token}
-
-
-@app.get("/api/superadmin/verify")
-async def superadmin_verify(request: Request):
-    """Verify superadmin session token."""
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="No token")
-    token = auth.split(" ", 1)[1]
-    try:
-        secret = get_setting("jwt_secret_key", JWT_SECRET_KEY)
-        payload = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
-        if payload.get("role") != "superadmin":
-            raise HTTPException(status_code=403, detail="Not superadmin")
-        return {"valid": True}
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+## Old key-based superadmin login/verify removed — now handled by routes/superadmin.py
 
 
 def _require_superadmin(request: Request):
-    """Dependency: require superadmin JWT in Authorization header."""
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    token = auth.split(" ", 1)[1]
+    """Require superadmin JWT from httpOnly cookie or Authorization header."""
+    token = request.cookies.get("superadmin_jwt")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth.split(" ", 1)[1]
+        else:
+            raise HTTPException(status_code=401, detail="Authentication required")
     try:
         secret = get_setting("jwt_secret_key", JWT_SECRET_KEY)
         payload = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
@@ -2065,6 +2044,8 @@ def start_cleanup_thread():
 @app.on_event("startup")
 async def startup_event():
     init_database()
+    # Initialize superadmin routes with app dependencies
+    init_superadmin_routes(JWT_SECRET_KEY, JWT_ALGORITHM, get_setting, db_session)
     start_cleanup_thread()
     cleanup_old_files()
 

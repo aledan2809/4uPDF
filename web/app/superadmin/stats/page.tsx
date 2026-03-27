@@ -5,9 +5,7 @@ import Script from "next/script";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3099";
 
-function authHeaders() {
-  return { Authorization: `Bearer ${localStorage.getItem("superadmin_token") || ""}` };
-}
+const fetchOpts: RequestInit = { credentials: "include" };
 
 interface Stats {
   total_users: number;
@@ -30,7 +28,7 @@ export default function StatsPage() {
   const chartsDrawn = useRef(false);
 
   useEffect(() => {
-    fetch(`${API_URL}/api/admin/stats`, { headers: authHeaders() })
+    fetch(`${API_URL}/api/admin/stats`, fetchOpts)
       .then((r) => r.json())
       .then((data) => {
         setStats(data);
@@ -42,13 +40,13 @@ export default function StatsPage() {
 
   // SSE for real-time active users
   useEffect(() => {
-    const token = localStorage.getItem("superadmin_token") || "";
-    const es = new EventSource(`${API_URL}/api/admin/active-users?token=${token}`);
+    // SSE doesn't support cookies natively; we poll instead
+    const es = new EventSource(`${API_URL}/api/admin/active-users`, { withCredentials: true });
     // Note: SSE doesn't support custom headers, so we rely on the fetch-based stats
     // and poll every 10s instead
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${API_URL}/api/admin/stats`, { headers: authHeaders() });
+        const res = await fetch(`${API_URL}/api/admin/stats`, fetchOpts);
         const data = await res.json();
         setActiveUsers(data.active_users_now);
       } catch { /* ignore */ }

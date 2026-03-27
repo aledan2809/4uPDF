@@ -4,9 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3099";
 
-function authHeaders() {
-  return { Authorization: `Bearer ${localStorage.getItem("superadmin_token") || ""}` };
-}
+const fetchOpts: RequestInit = { credentials: "include" };
 
 interface Voucher {
   id: string;
@@ -38,7 +36,7 @@ export default function VouchersPage() {
   const fetchVouchers = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/admin/vouchers`, { headers: authHeaders() });
+      const res = await fetch(`${API_URL}/api/admin/vouchers`, fetchOpts);
       const data = await res.json();
       setVouchers(data.vouchers || []);
     } catch (e) {
@@ -71,7 +69,7 @@ export default function VouchersPage() {
     try {
       const res = await fetch(`${API_URL}/api/admin/vouchers`, {
         method: "POST",
-        headers: authHeaders(),
+        credentials: "include",
         body: formData,
       });
       if (!res.ok) {
@@ -94,7 +92,7 @@ export default function VouchersPage() {
     formData.append("is_active", String(currentActive ? 0 : 1));
     await fetch(`${API_URL}/api/admin/vouchers/${id}`, {
       method: "PUT",
-      headers: authHeaders(),
+      credentials: "include",
       body: formData,
     });
     fetchVouchers();
@@ -104,7 +102,7 @@ export default function VouchersPage() {
     if (!confirm("Delete this voucher?")) return;
     await fetch(`${API_URL}/api/admin/vouchers/${id}`, {
       method: "DELETE",
-      headers: authHeaders(),
+      credentials: "include",
     });
     fetchVouchers();
   };

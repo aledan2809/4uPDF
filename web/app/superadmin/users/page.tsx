@@ -4,9 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3099";
 
-function authHeaders() {
-  return { Authorization: `Bearer ${localStorage.getItem("superadmin_token") || ""}` };
-}
+const fetchOpts: RequestInit = { credentials: "include" };
 
 interface User {
   id: string;
@@ -40,7 +38,7 @@ export default function UsersPage() {
     if (planFilter) params.set("plan_filter", planFilter);
 
     try {
-      const res = await fetch(`${API_URL}/api/admin/users?${params}`, { headers: authHeaders() });
+      const res = await fetch(`${API_URL}/api/admin/users?${params}`, fetchOpts);
       const data = await res.json();
       setUsers(data.users || []);
       setTotal(data.total || 0);
@@ -56,7 +54,7 @@ export default function UsersPage() {
   const toggleBan = async (userId: string) => {
     await fetch(`${API_URL}/api/admin/users/${userId}/ban`, {
       method: "POST",
-      headers: authHeaders(),
+      credentials: "include",
     });
     fetchUsers();
   };

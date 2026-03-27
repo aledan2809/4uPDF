@@ -15,6 +15,9 @@ const NAV_ITEMS = [
   { href: "/superadmin/analytics", label: "Analytics", icon: "🔍" },
 ];
 
+// Pages that don't require authentication
+const PUBLIC_PATHS = ["/superadmin/login", "/superadmin/forgot-password", "/superadmin/reset-password"];
+
 export default function SuperAdminLayout({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -22,24 +25,21 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
   const router = useRouter();
   const pathname = usePathname();
 
+  const isPublicPage = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+
   useEffect(() => {
-    const token = localStorage.getItem("superadmin_token");
-    if (!token) {
-      if (pathname !== "/superadmin/login") {
-        router.push("/superadmin/login");
-      }
+    if (isPublicPage) {
       setChecking(false);
       return;
     }
 
     fetch(`${API_URL}/api/superadmin/verify`, {
-      headers: { Authorization: `Bearer ${token}` },
+      credentials: "include",
     })
       .then((r) => {
         if (r.ok) {
           setAuthenticated(true);
         } else {
-          localStorage.removeItem("superadmin_token");
           router.push("/superadmin/login");
         }
       })
@@ -47,9 +47,9 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
         router.push("/superadmin/login");
       })
       .finally(() => setChecking(false));
-  }, [pathname, router]);
+  }, [pathname, router, isPublicPage]);
 
-  if (pathname === "/superadmin/login") {
+  if (isPublicPage) {
     return <>{children}</>;
   }
 
@@ -63,8 +63,15 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
 
   if (!authenticated) return null;
 
-  const handleLogout = () => {
-    localStorage.removeItem("superadmin_token");
+  const handleLogout = async () => {
+    try {
+      await fetch(`${API_URL}/api/superadmin/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      // Ignore errors
+    }
     router.push("/superadmin/login");
   };
 

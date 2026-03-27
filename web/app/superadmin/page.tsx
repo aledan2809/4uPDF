@@ -4,13 +4,7 @@ import { useEffect, useState } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3099";
 
-function getToken() {
-  return localStorage.getItem("superadmin_token") || "";
-}
-
-function authHeaders() {
-  return { Authorization: `Bearer ${getToken()}` };
-}
+const fetchOpts: RequestInit = { credentials: "include" };
 
 interface Stats {
   total_users: number;
@@ -27,7 +21,7 @@ export default function SuperAdminDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${API_URL}/api/admin/stats`, { headers: authHeaders() })
+    fetch(`${API_URL}/api/admin/stats`, fetchOpts)
       .then((r) => r.json())
       .then(setStats)
       .catch(console.error)
