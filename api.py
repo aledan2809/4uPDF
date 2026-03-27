@@ -229,6 +229,21 @@ def init_database():
             )
         """)
 
+        # Heartbeats table for real-time active user tracking
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS heartbeats (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                ip TEXT NOT NULL,
+                user_agent TEXT,
+                current_page TEXT,
+                tool_name TEXT,
+                session_id TEXT,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Add last_active, is_banned, and role columns to users (safe ALTER)
         for col, col_def in [
             ("last_active", "TIMESTAMP"),
@@ -237,6 +252,18 @@ def init_database():
         ]:
             try:
                 cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
+            except Exception:
+                pass  # Column already exists
+
+        # Add new columns to analytics_events (safe ALTER)
+        for col, col_def in [
+            ("tool_name", "TEXT"),
+            ("action_type", "TEXT"),
+            ("file_size", "INTEGER"),
+            ("processing_duration", "INTEGER"),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE analytics_events ADD COLUMN {col} {col_def}")
             except Exception:
                 pass  # Column already exists
 
@@ -250,6 +277,11 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_timestamp ON analytics_events(timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_event_type ON analytics_events(event_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_page ON analytics_events(page)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_tool ON analytics_events(tool_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_action ON analytics_events(action_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_heartbeats_ip ON heartbeats(ip)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_heartbeats_session ON heartbeats(session_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_heartbeats_last_seen ON heartbeats(last_seen)")
 
         # Insert default settings if not exist
         default_settings = {
@@ -1707,22 +1739,128 @@ async def get_admin_stats(request: Request):
 
 @app.post("/api/heartbeat")
 async def heartbeat(request: Request):
-    """Track active users via heartbeat."""
+    """Track active users via heartbeat with page/tool info."""
     ip = get_client_ip(request)
     _active_users[ip] = time.time()
+
+    # Parse optional JSON body for enhanced tracking
+    current_page = None
+    tool_name = None
+    session_id = None
+    user_id = None
+    try:
+        body = await request.json()
+        current_page = body.get("current_page")
+        tool_name = body.get("tool_name")
+        session_id = body.get("session_id")
+        user_id = body.get("user_id")
+    except Exception:
+        pass
+
+    # Also check JWT for user_id
+    if not user_id:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            try:
+                payload = decode_jwt_token(auth.split(" ", 1)[1])
+                if payload and payload.get("sub"):
+                    user_id = payload["sub"]
+            except Exception:
+                pass
+
+    user_agent = request.headers.get("user-agent", "")
+
+    try:
+        with db_session() as conn:
+            cursor = conn.cursor()
+            # Upsert heartbeat by IP + session_id
+            hb_key = f"{ip}:{session_id or 'default'}"
+            cursor.execute("SELECT id FROM heartbeats WHERE id = ?", (hb_key,))
+            if cursor.fetchone():
+                cursor.execute("""
+                    UPDATE heartbeats SET last_seen = ?, current_page = ?, tool_name = ?,
+                    user_id = ?, user_agent = ? WHERE id = ?
+                """, (datetime.utcnow().isoformat(), current_page, tool_name, user_id, user_agent, hb_key))
+            else:
+                now = datetime.utcnow().isoformat()
+                cursor.execute("""
+                    INSERT INTO heartbeats (id, user_id, ip, user_agent, current_page, tool_name, session_id, last_seen, first_seen)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (hb_key, user_id, ip, user_agent, current_page, tool_name, session_id, now, now))
+    except Exception:
+        pass
+
     return {"ok": True}
+
+
+@app.post("/api/analytics/heartbeat")
+async def analytics_heartbeat(request: Request):
+    """Alias for heartbeat - frontend sends every 30s with current page."""
+    return await heartbeat(request)
 
 
 @app.get("/api/admin/active-users")
 async def sse_active_users(request: Request):
-    """SSE endpoint for real-time active user count."""
+    """SSE endpoint for real-time active users with details."""
     _require_superadmin(request)
 
     async def event_generator():
         while True:
             now = time.time()
+            # In-memory count
             count = sum(1 for t in _active_users.values() if now - t < 300)
-            yield f"data: {json.dumps({'active_users': count, 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+
+            # Detailed active users from heartbeats table (last 5 min)
+            active_list = []
+            try:
+                cutoff = (datetime.utcnow() - timedelta(minutes=5)).isoformat()
+                with db_session() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT h.user_id, h.ip, h.user_agent, h.current_page, h.tool_name,
+                               h.first_seen, h.last_seen,
+                               u.email
+                        FROM heartbeats h
+                        LEFT JOIN users u ON h.user_id = u.id
+                        WHERE h.last_seen >= ?
+                        ORDER BY h.last_seen DESC
+                    """, (cutoff,))
+                    for row in cursor.fetchall():
+                        r = dict(row)
+                        # Calculate session duration
+                        try:
+                            first = datetime.fromisoformat(r["first_seen"])
+                            last = datetime.fromisoformat(r["last_seen"])
+                            duration_sec = int((last - first).total_seconds())
+                        except Exception:
+                            duration_sec = 0
+
+                        # Parse browser from user agent
+                        ua = r.get("user_agent") or ""
+                        browser = "Unknown"
+                        if "Firefox" in ua:
+                            browser = "Firefox"
+                        elif "Edg/" in ua:
+                            browser = "Edge"
+                        elif "Chrome" in ua:
+                            browser = "Chrome"
+                        elif "Safari" in ua:
+                            browser = "Safari"
+
+                        email = r.get("email") or (f"Anonymous#{hashlib.md5(r['ip'].encode()).hexdigest()[:6]}" if r.get("ip") else "Anonymous")
+
+                        active_list.append({
+                            "email": email,
+                            "current_page": r.get("current_page") or "/",
+                            "tool": r.get("tool_name") or "-",
+                            "duration_sec": duration_sec,
+                            "ip": r.get("ip") or "",
+                            "browser": browser,
+                        })
+            except Exception:
+                pass
+
+            yield f"data: {json.dumps({'active_users': count, 'users': active_list, 'timestamp': datetime.utcnow().isoformat()})}\n\n"
             await asyncio.sleep(5)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream",
@@ -1735,42 +1873,97 @@ async def sse_active_users(request: Request):
 
 @app.middleware("http")
 async def analytics_middleware(request: Request, call_next):
-    """Track page views and API calls for local analytics."""
+    """Track page views and API tool calls for local analytics."""
+    start_time = time.time()
+
+    # Read body for POST requests before call_next consumes it
+    content_length = 0
+    try:
+        cl = request.headers.get("content-length")
+        if cl:
+            content_length = int(cl)
+    except Exception:
+        pass
+
     response = await call_next(request)
 
-    # Only track GET requests to pages (not API calls or static files)
     path = request.url.path
-    if (request.method == "GET"
-        and not path.startswith("/api/")
-        and not path.startswith("/_next/")
-        and not path.startswith("/static/")
-        and not path.endswith((".js", ".css", ".ico", ".png", ".jpg", ".svg", ".woff2"))):
-        try:
-            ip = get_client_ip(request)
-            user_agent = request.headers.get("user-agent", "")
-            referrer = request.headers.get("referer", "")
+    ip = get_client_ip(request)
+    user_agent = request.headers.get("user-agent", "")
+    referrer = request.headers.get("referer", "")
+    processing_duration = int((time.time() - start_time) * 1000)  # ms
 
-            with db_session() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO analytics_events (id, event_type, page, ip, user_agent, referrer, timestamp)
-                    VALUES (?, 'pageview', ?, ?, ?, ?, ?)
-                """, (uuid.uuid4().hex, path, ip, user_agent, referrer,
-                      datetime.utcnow().isoformat()))
-        except Exception:
-            pass  # Don't break the request on analytics failure
-
-    # Update last_active for authenticated users
+    # Extract user_id from JWT if present
+    user_id = None
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         try:
             token = auth.split(" ", 1)[1]
             payload = decode_jwt_token(token)
             if payload and payload.get("sub"):
-                with db_session() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("UPDATE users SET last_active = ? WHERE id = ?",
-                                    (datetime.utcnow().isoformat(), payload["sub"]))
+                user_id = payload["sub"]
+        except Exception:
+            pass
+
+    # Track pageviews (GET to pages)
+    if (request.method == "GET"
+        and not path.startswith("/api/")
+        and not path.startswith("/_next/")
+        and not path.startswith("/static/")
+        and not path.endswith((".js", ".css", ".ico", ".png", ".jpg", ".svg", ".woff2"))):
+        try:
+            with db_session() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO analytics_events (id, event_type, page, user_id, ip, user_agent, referrer, timestamp)
+                    VALUES (?, 'pageview', ?, ?, ?, ?, ?, ?)
+                """, (uuid.uuid4().hex, path, user_id, ip, user_agent, referrer,
+                      datetime.utcnow().isoformat()))
+        except Exception:
+            pass
+
+    # Track API tool calls (POST to tool endpoints)
+    _tool_endpoints = {
+        "/api/merge": "merge", "/api/split": "split", "/api/split-pages": "split-pages",
+        "/api/split-ocr": "split-ocr", "/api/compress": "compress",
+        "/api/pdf-to-jpg": "pdf-to-jpg", "/api/pdf-to-png": "pdf-to-png",
+        "/api/pdf-to-word": "pdf-to-word", "/api/pdf-to-excel": "pdf-to-excel",
+        "/api/pdf-to-powerpoint": "pdf-to-ppt", "/api/pdf-to-text": "pdf-to-text",
+        "/api/word-to-pdf": "word-to-pdf", "/api/excel-to-pdf": "excel-to-pdf",
+        "/api/html-to-pdf": "html-to-pdf", "/api/rotate": "rotate",
+        "/api/extract-pages": "extract-pages", "/api/crop": "crop",
+        "/api/watermark": "watermark", "/api/protect": "protect",
+        "/api/unlock": "unlock", "/api/redact-pdf": "redact",
+        "/api/organize-pdf": "organize", "/api/flatten": "flatten",
+        "/api/repair": "repair", "/api/split-by-text": "split-by-text",
+        "/api/split-invoices": "split-invoices", "/api/ocr-layer": "ocr-layer",
+        "/api/extract-text-ocr": "extract-text-ocr", "/api/sign-pdf": "sign",
+    }
+    if request.method == "POST" and path in _tool_endpoints:
+        tool_name = _tool_endpoints[path]
+        action_type = "process"
+        status_code = response.status_code
+        try:
+            with db_session() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO analytics_events
+                    (id, event_type, page, user_id, ip, user_agent, tool_name, action_type,
+                     file_size, processing_duration, timestamp)
+                    VALUES (?, 'tool_use', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (uuid.uuid4().hex, path, user_id, ip, user_agent, tool_name,
+                      action_type, content_length, processing_duration,
+                      datetime.utcnow().isoformat()))
+        except Exception:
+            pass
+
+    # Update last_active for authenticated users
+    if user_id:
+        try:
+            with db_session() as conn:
+                cursor = conn.cursor()
+                cursor.execute("UPDATE users SET last_active = ? WHERE id = ?",
+                                (datetime.utcnow().isoformat(), user_id))
         except Exception:
             pass
 
@@ -1865,6 +2058,195 @@ async def get_admin_analytics(
         "daily_stats": daily_stats,
         "top_referrers": top_referrers,
         "period": period,
+    }
+
+
+@app.get("/api/admin/sessions")
+async def get_admin_sessions(
+    request: Request,
+    period: str = "24h",
+):
+    """Get user sessions for the given period."""
+    _require_superadmin(request)
+
+    period_map = {"24h": 1, "7d": 7, "30d": 30}
+    days = period_map.get(period, 1)
+
+    with db_session() as conn:
+        cursor = conn.cursor()
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+
+        # Group analytics events by IP into sessions (gap > 30 min = new session)
+        cursor.execute("""
+            SELECT ae.ip, ae.user_id, ae.page, ae.tool_name, ae.user_agent, ae.timestamp,
+                   u.email
+            FROM analytics_events ae
+            LEFT JOIN users u ON ae.user_id = u.id
+            WHERE ae.timestamp >= ?
+            ORDER BY ae.ip, ae.timestamp
+        """, (cutoff,))
+
+        rows = [dict(r) for r in cursor.fetchall()]
+
+    # Build sessions from sequential events grouped by IP
+    sessions = []
+    current_session = None
+    for row in rows:
+        ip = row["ip"] or ""
+        ts = row["timestamp"] or ""
+        try:
+            ts_dt = datetime.fromisoformat(ts)
+        except Exception:
+            continue
+
+        # Start new session if different IP or gap > 30 min
+        if (current_session is None
+            or current_session["ip"] != ip
+            or (ts_dt - current_session["_last_ts"]).total_seconds() > 1800):
+            if current_session:
+                current_session.pop("_last_ts", None)
+                current_session.pop("ip", None)
+                sessions.append(current_session)
+            email = row.get("email") or (f"Anonymous#{hashlib.md5(ip.encode()).hexdigest()[:6]}" if ip else "Anonymous")
+
+            ua = row.get("user_agent") or ""
+            country = "Unknown"
+            # Parse browser for session info
+            browser = "Unknown"
+            if "Firefox" in ua:
+                browser = "Firefox"
+            elif "Edg/" in ua:
+                browser = "Edge"
+            elif "Chrome" in ua:
+                browser = "Chrome"
+            elif "Safari" in ua:
+                browser = "Safari"
+
+            current_session = {
+                "user": email,
+                "pages": [],
+                "tools": [],
+                "start_time": ts,
+                "end_time": ts,
+                "duration_sec": 0,
+                "country": country,
+                "browser": browser,
+                "ip": ip,
+                "_last_ts": ts_dt,
+            }
+        else:
+            current_session["end_time"] = ts
+            current_session["_last_ts"] = ts_dt
+            current_session["duration_sec"] = int((ts_dt - datetime.fromisoformat(current_session["start_time"])).total_seconds())
+
+        page = row.get("page") or ""
+        if page and page not in current_session["pages"]:
+            current_session["pages"].append(page)
+        tool = row.get("tool_name") or ""
+        if tool and tool not in current_session["tools"]:
+            current_session["tools"].append(tool)
+
+    if current_session:
+        current_session.pop("_last_ts", None)
+        current_session.pop("ip", None)
+        sessions.append(current_session)
+
+    # Sort by start_time descending, limit to 200
+    sessions.sort(key=lambda s: s["start_time"], reverse=True)
+    return {"sessions": sessions[:200], "period": period}
+
+
+@app.get("/api/admin/tool-usage")
+async def get_admin_tool_usage(
+    request: Request,
+    period: str = "30d",
+):
+    """Get tool usage breakdown for the given period."""
+    _require_superadmin(request)
+
+    period_map = {"7d": 7, "30d": 30, "90d": 90, "365d": 365}
+    days = period_map.get(period, 30)
+
+    with db_session() as conn:
+        cursor = conn.cursor()
+
+        # From analytics_events with tool_name
+        cursor.execute("""
+            SELECT tool_name, COUNT(*) as count
+            FROM analytics_events
+            WHERE tool_name IS NOT NULL AND tool_name != ''
+            AND timestamp >= DATE('now', ?)
+            GROUP BY tool_name
+            ORDER BY count DESC
+        """, (f"-{days} days",))
+        tool_events = {row["tool_name"]: row["count"] for row in cursor.fetchall()}
+
+        # Also count from usage_history operations
+        cursor.execute("""
+            SELECT operation, COUNT(*) as count
+            FROM usage_history
+            WHERE created_at >= DATE('now', ?)
+            GROUP BY operation
+            ORDER BY count DESC
+        """, (f"-{days} days",))
+        for row in cursor.fetchall():
+            op = row["operation"]
+            tool_events[op] = tool_events.get(op, 0) + row["count"]
+
+    tools = [{"tool": k, "count": v} for k, v in sorted(tool_events.items(), key=lambda x: x[1], reverse=True)]
+    return {"tools": tools, "period": period}
+
+
+@app.get("/api/admin/activity-log")
+async def get_admin_activity_log(
+    request: Request,
+    page: int = 1,
+    per_page: int = 100,
+):
+    """Get paginated activity log."""
+    _require_superadmin(request)
+
+    offset = (page - 1) * per_page
+
+    with db_session() as conn:
+        cursor = conn.cursor()
+
+        # Total count
+        cursor.execute("SELECT COUNT(*) as c FROM analytics_events")
+        total = cursor.fetchone()["c"]
+
+        # Paginated results
+        cursor.execute("""
+            SELECT ae.id, ae.event_type, ae.page, ae.user_id, ae.ip, ae.tool_name,
+                   ae.action_type, ae.file_size, ae.processing_duration,
+                   ae.timestamp, u.email
+            FROM analytics_events ae
+            LEFT JOIN users u ON ae.user_id = u.id
+            ORDER BY ae.timestamp DESC
+            LIMIT ? OFFSET ?
+        """, (per_page, offset))
+
+        events = []
+        for row in cursor.fetchall():
+            r = dict(row)
+            email = r.get("email") or (f"Anonymous#{hashlib.md5(r['ip'].encode()).hexdigest()[:6]}" if r.get("ip") else "Anonymous")
+            events.append({
+                "timestamp": r["timestamp"],
+                "user": email,
+                "action": r.get("action_type") or r.get("event_type") or "pageview",
+                "tool": r.get("tool_name") or "-",
+                "page": r.get("page") or "-",
+                "file_size": r.get("file_size"),
+                "duration_ms": r.get("processing_duration"),
+                "status": "success",
+            })
+
+    return {
+        "events": events,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page,
     }
 
 

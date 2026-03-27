@@ -118,9 +118,20 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             (function(){
               var API = "${process.env.NEXT_PUBLIC_API_URL || ""}";
               if(!API) return;
-              function beat(){fetch(API+"/api/heartbeat",{method:"POST"}).catch(function(){});}
+              var sid = Math.random().toString(36).slice(2,10);
+              function beat(){
+                var page = window.location.pathname;
+                var tool = null;
+                if(page.startsWith("/tools/")) tool = page.split("/")[2] || null;
+                fetch(API+"/api/heartbeat",{
+                  method:"POST",
+                  headers:{"Content-Type":"application/json"},
+                  credentials:"include",
+                  body:JSON.stringify({current_page:page,tool_name:tool,session_id:sid})
+                }).catch(function(){});
+              }
               beat();
-              setInterval(beat, 60000);
+              setInterval(beat, 30000);
             })();
           `}
         </Script>
