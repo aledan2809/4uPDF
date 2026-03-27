@@ -8,6 +8,7 @@ export interface User {
   id: string;
   email: string;
   plan: string;
+  role?: string;
   base_plan?: string;
   subscription_status?: string;
   subscription_end_date?: string;
@@ -31,7 +32,7 @@ export interface UsageInfo {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string; role?: string }>;
   register: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   refreshUser: () => Promise<void>;
@@ -96,13 +97,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     try {
-      const formData = new FormData();
-      formData.append("email", email);
-      formData.append("password", password);
-
       const response = await fetch(`${API_URL}/api/auth/login`, {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email, password }),
       });
 
       const data = await response.json();
@@ -110,7 +109,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (response.ok && data.success) {
         setToken(data.token);
         setUser(data.user);
-        return { success: true };
+        const role = data.user?.role || "user";
+        if (typeof window !== "undefined") {
+          localStorage.setItem("user_role", role);
+        }
+        return { success: true, role };
       } else {
         return { success: false, error: data.detail || "Login failed" };
       }
@@ -147,6 +150,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = () => {
     setToken(null);
     setUser(null);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("user_role");
+    }
   };
 
   return (

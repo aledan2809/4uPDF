@@ -23,7 +23,11 @@ export default function LoginPage() {
     const result = await login(email, password);
 
     if (result.success) {
-      router.push("/dashboard");
+      if (result.role === "superadmin") {
+        router.push("/superadmin");
+      } else {
+        router.push("/dashboard");
+      }
     } else {
       setError(result.error || "Login failed");
     }

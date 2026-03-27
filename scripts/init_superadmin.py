@@ -49,7 +49,7 @@ def init_superadmin():
 
     conn.commit()
     conn.close()
-    print(f"[OK] SuperAdmin ready. Login at /superadmin/login with email: {SUPERADMIN_EMAIL}")
+    print(f"[OK] SuperAdmin ready. Login at /login with email: {SUPERADMIN_EMAIL} (unified login page)")
 
 
 if __name__ == "__main__":

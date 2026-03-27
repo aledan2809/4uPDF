@@ -757,11 +757,21 @@ async def register(
 
 
 @app.post("/api/auth/login")
-async def login(
-    email: str = Form(...),
-    password: str = Form(...)
-):
-    """Login and get JWT token."""
+async def login(request: Request):
+    """Login and get JWT token. Accepts JSON or Form data."""
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        body = await request.json()
+        email = body.get("email", "")
+        password = body.get("password", "")
+    else:
+        form = await request.form()
+        email = form.get("email", "")
+        password = form.get("password", "")
+
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+
     email = email.lower().strip()
 
     with db_session() as conn:
@@ -778,19 +788,53 @@ async def login(
         # Refresh user data after voucher check
         cursor.execute("SELECT * FROM users WHERE id = ?", (user["id"],))
         user = cursor.fetchone()
+        user_dict = dict(user)
 
-        token = create_jwt_token(user["id"], user["email"])
+        role = user_dict.get("role", "user") or "user"
+        token = create_jwt_token(user_dict["id"], user_dict["email"])
 
-        return {
+        response_data = {
             "success": True,
             "token": token,
             "user": {
-                "id": user["id"],
-                "email": user["email"],
-                "plan": user["plan"],
-                "subscription_status": user["subscription_status"]
-            }
+                "id": user_dict["id"],
+                "email": user_dict["email"],
+                "name": user_dict.get("name", ""),
+                "role": role,
+                "plan": user_dict["plan"],
+                "subscription_status": user_dict["subscription_status"]
+            },
+            "message": "Login successful"
         }
+
+        # If superadmin, also set httpOnly cookie for superadmin panel access
+        if role == "superadmin":
+            secret = get_setting("jwt_secret_key", JWT_SECRET_KEY)
+            sa_token = jwt.encode(
+                {
+                    "sub": user_dict["id"],
+                    "email": user_dict["email"],
+                    "role": "superadmin",
+                    "exp": datetime.utcnow() + timedelta(hours=24),
+                    "iat": datetime.utcnow(),
+                },
+                secret,
+                algorithm=JWT_ALGORITHM,
+            )
+            from fastapi.responses import JSONResponse
+            response = JSONResponse(content=response_data)
+            response.set_cookie(
+                key="superadmin_jwt",
+                value=sa_token,
+                httponly=True,
+                secure=True,
+                samesite="strict",
+                max_age=86400,
+                path="/",
+            )
+            return response
+
+        return response_data
 
 
 @app.get("/api/auth/me")
@@ -821,6 +865,7 @@ async def get_me(user: Dict[str, Any] = Depends(get_current_user_required)):
         "id": user["id"],
         "email": user["email"],
         "plan": user["plan"],
+        "role": user.get("role", "user") or "user",
         "base_plan": user["base_plan"],
         "subscription_status": user["subscription_status"],
         "subscription_end_date": user["subscription_end_date"],

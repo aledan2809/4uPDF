@@ -16,7 +16,7 @@ const NAV_ITEMS = [
 ];
 
 // Pages that don't require authentication
-const PUBLIC_PATHS = ["/superadmin/login", "/superadmin/forgot-password", "/superadmin/reset-password"];
+const PUBLIC_PATHS = ["/superadmin/forgot-password", "/superadmin/reset-password"];
 
 export default function SuperAdminLayout({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false);
@@ -40,11 +40,11 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
         if (r.ok) {
           setAuthenticated(true);
         } else {
-          router.push("/superadmin/login");
+          router.push("/login");
         }
       })
       .catch(() => {
-        router.push("/superadmin/login");
+        router.push("/login");
       })
       .finally(() => setChecking(false));
   }, [pathname, router, isPublicPage]);
@@ -72,7 +72,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
     } catch {
       // Ignore errors
     }
-    router.push("/superadmin/login");
+    router.push("/login");
   };
 
   return (
