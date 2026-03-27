@@ -56,7 +56,7 @@ export default function ForgotPasswordPage() {
                 If the email exists, a reset link has been sent. Check your inbox or server console.
               </div>
               <Link
-                href="/superadmin/login"
+                href="/login"
                 className="inline-block text-sm text-blue-400 hover:text-blue-300 transition-colors"
               >
                 Back to Login
@@ -97,7 +97,7 @@ export default function ForgotPasswordPage() {
           {!sent && (
             <div className="mt-6 text-center">
               <Link
-                href="/superadmin/login"
+                href="/login"
                 className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
               >
                 Back to Login

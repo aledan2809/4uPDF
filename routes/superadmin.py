@@ -28,11 +28,6 @@ _db_session = None
 _reset_tokens: dict = {}
 
 
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
@@ -82,54 +77,6 @@ def _require_superadmin_cookie(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Token expired")
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
-
-
-@router.post("/login")
-async def superadmin_login(data: LoginRequest):
-    """Authenticate superadmin with email and password."""
-    with _db_session() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, email, password_hash, role FROM users WHERE email = ?",
-            (data.email,)
-        )
-        user = cursor.fetchone()
-
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    user = dict(user)
-
-    if not bcrypt.checkpw(data.password.encode("utf-8"), user["password_hash"].encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    if user.get("role") != "superadmin":
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    secret = _get_secret()
-    token = jwt.encode(
-        {
-            "sub": user["id"],
-            "email": user["email"],
-            "role": "superadmin",
-            "exp": datetime.utcnow() + timedelta(hours=24),
-            "iat": datetime.utcnow(),
-        },
-        secret,
-        algorithm=_jwt_algorithm,
-    )
-
-    response = JSONResponse(content={"success": True})
-    response.set_cookie(
-        key="superadmin_jwt",
-        value=token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=86400,
-        path="/",
-    )
-    return response
 
 
 @router.get("/verify")

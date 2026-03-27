@@ -77,7 +77,7 @@ function ResetPasswordForm() {
           Password has been reset successfully.
         </div>
         <Link
-          href="/superadmin/login"
+          href="/login"
           className="inline-block px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
         >
           Go to Login
