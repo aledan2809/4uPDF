@@ -7,12 +7,15 @@ import os
 import io
 import uuid
 import time
+import logging
 import zipfile
 from pathlib import Path
 from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 import fitz
+
+logger = logging.getLogger("4updf.routes")
 
 router = APIRouter()
 
@@ -74,7 +77,8 @@ async def merge_pdfs(files: List[UploadFile] = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Merge failed: {str(e)}")
+        logger.exception("Merge failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== SPLIT PDF ==========
@@ -194,7 +198,8 @@ async def split_pdf(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Split failed: {str(e)}")
+        logger.exception("Split failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== COMPRESS PDF ==========
@@ -272,7 +277,8 @@ async def compress_pdf(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Compression failed: {str(e)}")
+        logger.exception("Compression failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PDF TO WORD ==========
@@ -338,7 +344,8 @@ async def pdf_to_word(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Conversion failed: {str(e)}")
+        logger.exception("Conversion failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== WORD TO PDF ==========
@@ -397,7 +404,8 @@ async def word_to_pdf(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Conversion failed: {str(e)}")
+        logger.exception("Conversion failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== JPG TO PDF ==========
@@ -448,7 +456,8 @@ async def jpg_to_pdf(files: List[UploadFile] = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Conversion failed: {str(e)}")
+        logger.exception("Conversion failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PDF TO JPG ==========
@@ -535,7 +544,8 @@ async def pdf_to_jpg(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Conversion failed: {str(e)}")
+        logger.exception("Conversion failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 2: ROTATE PDF ==========
@@ -579,7 +589,8 @@ async def rotate_pdf(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Rotation failed: {str(e)}")
+        logger.exception("Rotation failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 2: DELETE PAGES ==========
@@ -625,7 +636,8 @@ async def delete_pages(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Delete pages failed: {str(e)}")
+        logger.exception("Delete pages failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 2: EXTRACT PAGES ==========
@@ -670,7 +682,8 @@ async def extract_pages(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Extract pages failed: {str(e)}")
+        logger.exception("Extract pages failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 2: WATERMARK PDF ==========
@@ -719,7 +732,8 @@ async def watermark_pdf(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Watermark failed: {str(e)}")
+        logger.exception("Watermark failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 2: PROTECT PDF (PASSWORD) ==========
@@ -773,7 +787,8 @@ async def protect_pdf(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Protection failed: {str(e)}")
+        logger.exception("Protection failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 2: UNLOCK PDF ==========
@@ -811,7 +826,8 @@ async def unlock_pdf(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unlock failed: {str(e)}")
+        logger.exception("Unlock failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 3: SPLIT BY BARCODE ==========
@@ -891,7 +907,8 @@ async def split_by_barcode(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Barcode split failed: {str(e)}")
+        logger.exception("Barcode split failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 3: AUTO-RENAME PDF ==========
@@ -981,7 +998,8 @@ async def auto_rename(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Auto-rename failed: {str(e)}")
+        logger.exception("Auto-rename failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 3: DOCUMENT TYPE DETECTION ==========
@@ -1058,12 +1076,16 @@ async def detect_document_type(
             best_score = scores.get(best_type, 0)
             confidence = min(100, best_score * 25)
 
+            temp_doc = fitz.open(stream=io.BytesIO(content), filetype="pdf")
+            page_count = len(temp_doc)
+            temp_doc.close()
+
             results.append({
                 "file": upload_file.filename,
                 "type": best_type,
                 "confidence": confidence,
                 "keywords": matched_keywords.get(best_type, []),
-                "page_count": len(fitz.open(stream=io.BytesIO(content), filetype="pdf")),
+                "page_count": page_count,
                 "text_preview": full_text[:200].strip()
             })
 
@@ -1071,7 +1093,8 @@ async def detect_document_type(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
+        logger.exception("Detection failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 4: ARCHIVE PROCESSOR ==========
@@ -1178,7 +1201,8 @@ async def process_archive(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Archive processing failed: {str(e)}")
+        logger.exception("Archive processing failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 2: SIGN PDF ==========
@@ -1267,7 +1291,8 @@ async def sign_pdf(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Signature failed: {str(e)}")
+        logger.exception("Signature failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 3: SPLIT BY TEXT PATTERN ==========
@@ -1350,7 +1375,8 @@ async def split_by_pattern(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Pattern split failed: {str(e)}")
+        logger.exception("Pattern split failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== PHASE 3: SPLIT BY INVOICE NUMBER ==========
@@ -1436,7 +1462,8 @@ async def split_by_invoice(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Invoice split failed: {str(e)}")
+        logger.exception("Invoice split failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ========== HELPER ==========
