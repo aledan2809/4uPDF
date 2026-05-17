@@ -296,7 +296,7 @@ export default function DashboardPage() {
                   {usage.limit_reached && (
                     <p className="text-sm text-red-400">
                       Daily limit reached.{" "}
-                      <Link href="/pricing" className="text-blue-400 hover:underline">
+                      <Link href="/pricing" className="text-blue-400 underline hover:text-blue-300">
                         Upgrade for more
                       </Link>
                     </p>

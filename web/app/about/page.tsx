@@ -152,13 +152,13 @@ export default function AboutPage() {
               <div className="mt-4 space-y-2">
                 <p className="text-gray-300">
                   General inquiries:{" "}
-                  <a href="mailto:hello@4updf.com" className="text-blue-400 hover:underline">
+                  <a href="mailto:hello@4updf.com" className="text-blue-400 underline hover:text-blue-300">
                     hello@4updf.com
                   </a>
                 </p>
                 <p className="text-gray-300">
                   Support:{" "}
-                  <a href="mailto:support@4updf.com" className="text-blue-400 hover:underline">
+                  <a href="mailto:support@4updf.com" className="text-blue-400 underline hover:text-blue-300">
                     support@4updf.com
                   </a>
                 </p>
