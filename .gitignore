@@ -17,3 +17,7 @@ data/
 *.db
 venv/
 backend/venv/
+*.tsbuildinfo
+.env.local
+*.bak
+.env.bak*
