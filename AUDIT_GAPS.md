@@ -23,7 +23,7 @@ At the start of every session opened on this project:
 
 | Gap ID | Severity | Area | Description | Status | Resolution |
 |--------|----------|------|-------------|--------|------------|
-| G-PDF-VCS-001 | HIGH | Governance | VPS2 has 911 lines of uncommitted dev work on 4uPDF directly on server (api.py +468, web/app/(dashboard)/layout.tsx +46, web/app/superadmin/analytics/page.tsx +429). This work has NEVER been committed to git. Risk: loss of work on any redeploy or VPS failure. | OPEN | Requires dedicated session: `ssh root@72.62.155.74`, stash/commit VPS changes, push to GitHub, then resume standard deploy workflow |
+| G-PDF-VCS-001 | HIGH | Governance | VPS2 had 934 lines of uncommitted dev work on 4uPDF directly on server (api.py +468, layout +46, superadmin/analytics/page.tsx +429) + untracked top-level tool pages + web/public. Never committed. Risk: loss on redeploy/VPS failure. | Eliminated (2026-06-02) | Reconciled (data-loss closed): exact running state captured to GitHub branches `vps-prod-snapshot-2026-06-02` + `master` (commit `ba7265a`); origin's undeployed improvements (security/proxy/a11y) preserved on `improvements-undeployed-2026-06` (`2c1bedd`). Live prod DB (`data/4updf.db`) untracked via `git rm --cached` (was tracked → merge landmine) + .gitignore hardened. split-ocr (NO-TOUCH) untouched. Site untouched (no rebuild). **Deferred follow-up**: unify deployed line ⇄ improvements line (adopt security/proxy via tested worktree). |
 
 ---
 
