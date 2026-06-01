@@ -141,6 +141,31 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             (function(){
               var API = "${process.env.NEXT_PUBLIC_API_URL || ""}";
               if(!API) return;
+              function getUtm(){
+                try{
+                  var p = new URLSearchParams(window.location.search);
+                  return {
+                    utm_source: p.get('utm_source')||'',
+                    utm_medium: p.get('utm_medium')||'',
+                    utm_campaign: p.get('utm_campaign')||'',
+                    utm_content: p.get('utm_content')||'',
+                    utm_term: p.get('utm_term')||'',
+                    fbclid: p.get('fbclid')||''
+                  };
+                }catch(e){ return {utm_source:'',utm_medium:'',utm_campaign:'',utm_content:'',utm_term:'',fbclid:''}; }
+              }
+              // First-touch attribution: persist the very first landing source
+              try{
+                var u0 = getUtm();
+                if((u0.utm_source || u0.utm_campaign || u0.fbclid) && !localStorage.getItem('_4u_acq')){
+                  localStorage.setItem('_4u_acq', JSON.stringify({
+                    source: u0.utm_source || (u0.fbclid ? 'facebook' : ''),
+                    campaign: u0.utm_campaign || '',
+                    referrer: document.referrer || '',
+                    ts: Date.now()
+                  }));
+                }
+              }catch(e){}
               var tracked = {};
               function trackPageView(){
                 var page = window.location.pathname;
@@ -148,11 +173,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 var key = page + '|' + Date.now().toString().slice(0,-4);
                 if(tracked[key]) return;
                 tracked[key] = true;
+                var u = getUtm();
                 fetch(API+"/api/analytics/track",{
                   method:"POST",
                   headers:{"Content-Type":"application/json"},
                   credentials:"include",
-                  body:JSON.stringify({event_type:"pageview",page:page,referrer:ref})
+                  body:JSON.stringify({event_type:"pageview",page:page,referrer:ref,
+                    utm_source:u.utm_source,utm_medium:u.utm_medium,utm_campaign:u.utm_campaign,
+                    utm_content:u.utm_content,utm_term:u.utm_term,fbclid:u.fbclid})
                 }).catch(function(){});
               }
               trackPageView();

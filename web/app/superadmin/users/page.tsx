@@ -15,6 +15,36 @@ interface User {
   created_at: string;
   last_active: string | null;
   is_banned: number;
+  acq_source?: string | null;
+  acq_campaign?: string | null;
+  acq_referrer?: string | null;
+}
+
+// First-touch acquisition → human label, e.g. "Facebook → grup-contabili"
+function acqDisplay(u: User): { label: string; campaign: string; tone: string; title: string } {
+  let src = (u.acq_source || "").toLowerCase().trim();
+  const campaign = u.acq_campaign || "";
+  const ref = u.acq_referrer || "";
+  if (!src && ref) {
+    try { src = new URL(ref).hostname.replace(/^www\./, ""); } catch { src = ref; }
+  }
+  let label = "Direct";
+  let tone = "text-gray-500";
+  if (src) {
+    if (/facebook|fb\.com|fb\.me|\bfb\b/.test(src)) { label = "Facebook"; tone = "text-blue-400"; }
+    else if (/instagram/.test(src)) { label = "Instagram"; tone = "text-pink-400"; }
+    else if (/google/.test(src)) { label = "Google"; tone = "text-green-400"; }
+    else if (/bing/.test(src)) { label = "Bing"; tone = "text-teal-400"; }
+    else if (/t\.co|twitter|x\.com/.test(src)) { label = "Twitter/X"; tone = "text-sky-400"; }
+    else if (/linkedin/.test(src)) { label = "LinkedIn"; tone = "text-blue-300"; }
+    else { label = src; tone = "text-gray-300"; }
+  }
+  const title = [
+    u.acq_source ? `source: ${u.acq_source}` : "",
+    campaign ? `campaign: ${campaign}` : "",
+    ref ? `ref: ${ref}` : "",
+  ].filter(Boolean).join(" | ") || "Unknown / direct signup";
+  return { label, campaign, tone, title };
 }
 
 export default function UsersPage() {
@@ -102,6 +132,7 @@ export default function UsersPage() {
                 <th className="px-4 py-3 font-medium">Plan</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Registered</th>
+                <th className="px-4 py-3 font-medium">Source</th>
                 <th className="px-4 py-3 font-medium">Last Active</th>
                 <th className="px-4 py-3 font-medium">Actions</th>
               </tr>
@@ -109,11 +140,11 @@ export default function UsersPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-gray-500">Loading...</td>
+                  <td colSpan={7} className="px-4 py-8 text-center text-gray-500">Loading...</td>
                 </tr>
               ) : users.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-gray-500">No users found</td>
+                  <td colSpan={7} className="px-4 py-8 text-center text-gray-500">No users found</td>
                 </tr>
               ) : (
                 users.map((u) => (
@@ -137,6 +168,17 @@ export default function UsersPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-gray-400">{formatDate(u.created_at)}</td>
+                    <td className="px-4 py-3 text-xs whitespace-nowrap">
+                      {(() => {
+                        const s = acqDisplay(u);
+                        return (
+                          <span title={s.title} className={s.tone}>
+                            {s.label}
+                            {s.campaign ? <span className="text-amber-400"> → {s.campaign}</span> : null}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="px-4 py-3 text-gray-400">{u.last_active ? formatDate(u.last_active) : "Never"}</td>
                     <td className="px-4 py-3">
                       <button

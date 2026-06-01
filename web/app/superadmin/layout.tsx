@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { href: "/superadmin/stats", label: "Stats", icon: "📈" },
   { href: "/superadmin/settings", label: "Settings", icon: "⚙️" },
   { href: "/superadmin/analytics", label: "Analytics", icon: "🔍" },
+  { href: "/superadmin/link-generator", label: "Link Generator", icon: "🔗" },
 ];
 
 // Pages that don't require authentication

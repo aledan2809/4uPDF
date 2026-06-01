@@ -49,6 +49,10 @@ interface ActivityEvent {
   page: string;
   file_size: number | null;
   duration_ms: number | null;
+  referrer?: string;
+  utm_source?: string;
+  utm_campaign?: string;
+  fbclid?: string;
   status: string;
 }
 
@@ -74,6 +78,46 @@ function formatTime(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+// Turn raw referrer + UTM into a human label + tone, e.g. "Facebook → grup-contabili"
+function prettySource(opts: { referrer?: string; utm_source?: string; utm_campaign?: string; fbclid?: string }): {
+  label: string;
+  campaign: string;
+  tone: string;
+  title: string;
+} {
+  const referrer = opts.referrer || "";
+  const campaign = opts.utm_campaign || "";
+  let src = (opts.utm_source || "").toLowerCase().trim();
+  if (!src && opts.fbclid) src = "facebook";
+  if (!src && referrer) {
+    try {
+      src = new URL(referrer).hostname.replace(/^www\./, "");
+    } catch {
+      src = referrer;
+    }
+  }
+  let label = "Direct";
+  let tone = "text-gray-400";
+  if (src) {
+    if (/facebook|fb\.com|fb\.me|\bfb\b/.test(src)) { label = "Facebook"; tone = "text-blue-400"; }
+    else if (/instagram/.test(src)) { label = "Instagram"; tone = "text-pink-400"; }
+    else if (/google/.test(src)) { label = "Google"; tone = "text-green-400"; }
+    else if (/bing/.test(src)) { label = "Bing"; tone = "text-teal-400"; }
+    else if (/t\.co|twitter|x\.com/.test(src)) { label = "Twitter/X"; tone = "text-sky-400"; }
+    else if (/linkedin/.test(src)) { label = "LinkedIn"; tone = "text-blue-300"; }
+    else if (/chatgpt|openai/.test(src)) { label = "ChatGPT"; tone = "text-emerald-400"; }
+    else if (/youtube/.test(src)) { label = "YouTube"; tone = "text-red-400"; }
+    else { label = src; tone = "text-gray-300"; }
+  }
+  const title = [
+    opts.utm_source ? `source: ${opts.utm_source}` : "",
+    campaign ? `campaign: ${campaign}` : "",
+    referrer ? `ref: ${referrer}` : "",
+    opts.fbclid ? "fbclid present" : "",
+  ].filter(Boolean).join(" | ") || "Direct visit (no referrer)";
+  return { label, campaign, tone, title };
 }
 
 // ============================================================
@@ -366,6 +410,7 @@ function ActivityLogSection() {
               <tr className="text-gray-400 border-b border-gray-800">
                 <th className="text-left py-2 pr-3">Time</th>
                 <th className="text-left py-2 pr-3">User</th>
+                <th className="text-left py-2 pr-3">Source</th>
                 <th className="text-left py-2 pr-3">Action</th>
                 <th className="text-left py-2 pr-3">Tool</th>
                 <th className="text-left py-2 pr-3">Page</th>
@@ -379,6 +424,17 @@ function ActivityLogSection() {
                 <tr key={i} className="border-b border-gray-800/50 text-gray-300">
                   <td className="py-2 pr-3 text-xs whitespace-nowrap">{formatTime(e.timestamp)}</td>
                   <td className="py-2 pr-3 truncate max-w-[140px]">{e.user}</td>
+                  <td className="py-2 pr-3 text-xs whitespace-nowrap">
+                    {(() => {
+                      const s = prettySource(e);
+                      return (
+                        <span title={s.title} className={s.tone}>
+                          {s.label}
+                          {s.campaign ? <span className="text-amber-400"> → {s.campaign}</span> : null}
+                        </span>
+                      );
+                    })()}
+                  </td>
                   <td className="py-2 pr-3">
                     <span className={`inline-block px-1.5 py-0.5 rounded text-xs ${
                       e.action === "process" ? "bg-blue-500/20 text-blue-300"

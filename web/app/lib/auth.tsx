@@ -128,6 +128,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       formData.append("email", email);
       formData.append("password", password);
 
+      // First-touch acquisition attribution (where the user originally came from)
+      try {
+        const raw = typeof window !== "undefined" ? localStorage.getItem("_4u_acq") : null;
+        if (raw) {
+          const acq = JSON.parse(raw);
+          if (acq?.source) formData.append("acq_source", String(acq.source).slice(0, 255));
+          if (acq?.campaign) formData.append("acq_campaign", String(acq.campaign).slice(0, 255));
+          if (acq?.referrer) formData.append("acq_referrer", String(acq.referrer).slice(0, 512));
+        }
+      } catch {}
+
       const response = await fetch(`${API_URL}/api/auth/register`, {
         method: "POST",
         body: formData,

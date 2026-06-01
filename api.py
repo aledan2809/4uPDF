@@ -249,6 +249,10 @@ def init_database():
             ("last_active", "TIMESTAMP"),
             ("is_banned", "INTEGER DEFAULT 0"),
             ("role", "TEXT DEFAULT 'user'"),
+            # First-touch acquisition attribution (where the user came from)
+            ("acq_source", "TEXT"),
+            ("acq_campaign", "TEXT"),
+            ("acq_referrer", "TEXT"),
         ]:
             try:
                 cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
@@ -261,6 +265,13 @@ def init_database():
             ("action_type", "TEXT"),
             ("file_size", "INTEGER"),
             ("processing_duration", "INTEGER"),
+            # Referral / UTM attribution
+            ("utm_source", "TEXT"),
+            ("utm_medium", "TEXT"),
+            ("utm_campaign", "TEXT"),
+            ("utm_content", "TEXT"),
+            ("utm_term", "TEXT"),
+            ("fbclid", "TEXT"),
         ]:
             try:
                 cursor.execute(f"ALTER TABLE analytics_events ADD COLUMN {col} {col_def}")
@@ -279,6 +290,8 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_page ON analytics_events(page)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_tool ON analytics_events(tool_name)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_action ON analytics_events(action_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_utm_campaign ON analytics_events(utm_campaign)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_referrer ON analytics_events(referrer)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_heartbeats_ip ON heartbeats(ip)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_heartbeats_session ON heartbeats(session_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_heartbeats_last_seen ON heartbeats(last_seen)")
@@ -747,7 +760,10 @@ def health():
 async def register(
     email: str = Form(...),
     password: str = Form(...),
-    plan: str = Form("free")
+    plan: str = Form("free"),
+    acq_source: str = Form(None),
+    acq_campaign: str = Form(None),
+    acq_referrer: str = Form(None),
 ):
     """Register a new user."""
     if not email or not password:
@@ -770,10 +786,15 @@ async def register(
         user_id = uuid.uuid4().hex
         password_hash = hash_password(password)
 
+        _acq_source = (acq_source or "").strip()[:255] or None
+        _acq_campaign = (acq_campaign or "").strip()[:255] or None
+        _acq_referrer = (acq_referrer or "").strip()[:512] or None
         cursor.execute("""
-            INSERT INTO users (id, email, password_hash, plan, base_plan)
-            VALUES (?, ?, ?, ?, ?)
-        """, (user_id, email, password_hash, "free", "free"))
+            INSERT INTO users (id, email, password_hash, plan, base_plan,
+                               acq_source, acq_campaign, acq_referrer)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, email, password_hash, "free", "free",
+              _acq_source, _acq_campaign, _acq_referrer))
 
         token = create_jwt_token(user_id, email)
 
@@ -1558,7 +1579,8 @@ async def list_users(
 
         cursor.execute(f"""
             SELECT id, email, plan, base_plan, subscription_status,
-                   created_at, updated_at, last_active, is_banned
+                   created_at, updated_at, last_active, is_banned,
+                   acq_source, acq_campaign, acq_referrer
             FROM users
             {where_sql}
             ORDER BY {sort_by} {sort_dir}
@@ -1994,6 +2016,17 @@ async def track_analytics_event(request: Request):
     user_id = None
     tool_name = body.get("tool_name", "")
 
+    # Referral / UTM attribution (sent by the frontend tracker from the landing URL)
+    def _clean(v):
+        v = (v or "").strip()
+        return v[:255] if v else None
+    utm_source = _clean(body.get("utm_source"))
+    utm_medium = _clean(body.get("utm_medium"))
+    utm_campaign = _clean(body.get("utm_campaign"))
+    utm_content = _clean(body.get("utm_content"))
+    utm_term = _clean(body.get("utm_term"))
+    fbclid = _clean(body.get("fbclid"))
+
     # Try to get user from auth token
     try:
         auth = request.headers.get("authorization", "")
@@ -2009,9 +2042,12 @@ async def track_analytics_event(request: Request):
     with db_session() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO analytics_events (id, event_type, page, ip, user_agent, referrer, user_id, tool_name, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO analytics_events
+            (id, event_type, page, ip, user_agent, referrer, user_id, tool_name,
+             utm_source, utm_medium, utm_campaign, utm_content, utm_term, fbclid, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (uuid.uuid4().hex, event_type, page, ip, user_agent, ref, user_id, tool_name,
+              utm_source, utm_medium, utm_campaign, utm_content, utm_term, fbclid,
               datetime.utcnow().isoformat()))
 
     return {"success": True}
@@ -2245,6 +2281,7 @@ async def get_admin_activity_log(
         cursor.execute("""
             SELECT ae.id, ae.event_type, ae.page, ae.user_id, ae.ip, ae.tool_name,
                    ae.action_type, ae.file_size, ae.processing_duration,
+                   ae.referrer, ae.utm_source, ae.utm_campaign, ae.fbclid,
                    ae.timestamp, u.email
             FROM analytics_events ae
             LEFT JOIN users u ON ae.user_id = u.id
@@ -2264,6 +2301,10 @@ async def get_admin_activity_log(
                 "page": r.get("page") or "-",
                 "file_size": r.get("file_size"),
                 "duration_ms": r.get("processing_duration"),
+                "referrer": r.get("referrer") or "",
+                "utm_source": r.get("utm_source") or "",
+                "utm_campaign": r.get("utm_campaign") or "",
+                "fbclid": r.get("fbclid") or "",
                 "status": "success",
             })
 
