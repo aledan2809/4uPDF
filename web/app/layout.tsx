@@ -174,9 +174,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 if(tracked[key]) return;
                 tracked[key] = true;
                 var u = getUtm();
+                var hdrs = {"Content-Type":"application/json"};
+                try { var tk = localStorage.getItem('auth_token'); if(tk){ hdrs['Authorization'] = 'Bearer ' + tk; } } catch(e){}
                 fetch(API+"/api/analytics/track",{
                   method:"POST",
-                  headers:{"Content-Type":"application/json"},
+                  headers:hdrs,
                   credentials:"include",
                   body:JSON.stringify({event_type:"pageview",page:page,referrer:ref,
                     utm_source:u.utm_source,utm_medium:u.utm_medium,utm_campaign:u.utm_campaign,

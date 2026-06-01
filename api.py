@@ -2027,15 +2027,18 @@ async def track_analytics_event(request: Request):
     utm_term = _clean(body.get("utm_term"))
     fbclid = _clean(body.get("fbclid"))
 
-    # Try to get user from auth token
+    # Try to get user from auth token (Bearer header for regular users,
+    # or the superadmin httpOnly cookie). Use decode_jwt_token so the secret
+    # matches token creation (get_setting jwt_secret_key) — an inline decode
+    # with the JWT_SECRET_KEY constant silently fails when a DB secret is set.
     try:
         auth = request.headers.get("authorization", "")
         cookie_token = request.cookies.get("superadmin_jwt", "")
-        token = auth.replace("Bearer ", "") if auth else cookie_token
+        token = auth.replace("Bearer ", "").strip() if auth else cookie_token
         if token:
-            import jwt as pyjwt
-            payload = pyjwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
-            user_id = payload.get("sub", "")
+            payload = decode_jwt_token(token)
+            if payload:
+                user_id = payload.get("sub") or None
     except Exception:
         pass
 
