@@ -47,7 +47,7 @@ export default function ContactPage() {
                       type="text"
                       id="name"
                       required
-                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 transition-colors"
                       placeholder="Your name"
                       value={formData.name}
                       onChange={(e) => setFormData({ ...formData, name: e.target.value })}
@@ -62,7 +62,7 @@ export default function ContactPage() {
                       type="email"
                       id="email"
                       required
-                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 transition-colors"
                       placeholder="your@email.com"
                       value={formData.email}
                       onChange={(e) => setFormData({ ...formData, email: e.target.value })}
@@ -99,7 +99,7 @@ export default function ContactPage() {
                       id="message"
                       required
                       rows={6}
-                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors resize-none"
+                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 transition-colors resize-none"
                       placeholder="How can we help you?"
                       value={formData.message}
                       onChange={(e) => setFormData({ ...formData, message: e.target.value })}
@@ -140,7 +140,7 @@ export default function ContactPage() {
                       <h3 className="font-medium text-white">Email</h3>
                       <a
                         href="mailto:support@4updf.com"
-                        className="text-gray-400 hover:text-blue-400 transition-colors"
+                        className="text-blue-400 underline hover:text-blue-300 transition-colors"
                       >
                         support@4updf.com
                       </a>

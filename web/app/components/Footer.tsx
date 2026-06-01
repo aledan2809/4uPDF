@@ -171,7 +171,7 @@ export default function Footer() {
             <p className="text-sm text-gray-400">
               &copy; {new Date().getFullYear()} 4uPDF.com. All rights reserved.
             </p>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-gray-400">
               Your files are processed securely and deleted automatically after 1 hour.
             </p>
           </div>

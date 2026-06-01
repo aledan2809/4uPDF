@@ -118,9 +118,51 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             (function(){
               var API = "${process.env.NEXT_PUBLIC_API_URL || ""}";
               if(!API) return;
-              function beat(){fetch(API+"/api/heartbeat",{method:"POST"}).catch(function(){});}
+              var sid = Math.random().toString(36).slice(2,10);
+              function beat(){
+                var page = window.location.pathname;
+                var tool = null;
+                if(page.startsWith("/tools/")) tool = page.split("/")[2] || null;
+                fetch(API+"/api/heartbeat",{
+                  method:"POST",
+                  headers:{"Content-Type":"application/json"},
+                  credentials:"include",
+                  body:JSON.stringify({current_page:page,tool_name:tool,session_id:sid})
+                }).catch(function(){});
+              }
               beat();
-              setInterval(beat, 60000);
+              setInterval(beat, 30000);
+            })();
+          `}
+        </Script>
+
+        <Script id="pageview-tracker" strategy="afterInteractive">
+          {`
+            (function(){
+              var API = "${process.env.NEXT_PUBLIC_API_URL || ""}";
+              if(!API) return;
+              var tracked = {};
+              function trackPageView(){
+                var page = window.location.pathname;
+                var ref = document.referrer || '';
+                var key = page + '|' + Date.now().toString().slice(0,-4);
+                if(tracked[key]) return;
+                tracked[key] = true;
+                fetch(API+"/api/analytics/track",{
+                  method:"POST",
+                  headers:{"Content-Type":"application/json"},
+                  credentials:"include",
+                  body:JSON.stringify({event_type:"pageview",page:page,referrer:ref})
+                }).catch(function(){});
+              }
+              trackPageView();
+              // Track SPA navigation via History API
+              var origPush = history.pushState;
+              history.pushState = function(){
+                origPush.apply(this, arguments);
+                setTimeout(trackPageView, 100);
+              };
+              window.addEventListener('popstate', function(){ setTimeout(trackPageView, 100); });
             })();
           `}
         </Script>
