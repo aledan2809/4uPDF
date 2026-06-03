@@ -1190,6 +1190,52 @@ async def get_returning_status(
     }
 
 
+@app.get("/api/cas/render")
+def cas_render_proxy(
+    request: Request,
+    placement: str = "",
+    n: str = "",
+    source: str = "4updf",
+    visitor: str = "",
+):
+    """Server-side proxy for the CAS (Carusel de Ads) render endpoint in
+    MarketingAutomation (ma.techbiz.ae).
+
+    MA's /api/cas/render is gated by CAS_API_KEY in production. The key must NOT
+    live in the browser bundle, so the CasCarousel client calls this same-origin
+    endpoint (nginx routes /api -> this backend) which attaches X-API-Key
+    server-side and forwards to MA. Track + click are keyless (browser-direct).
+
+    Sync def on purpose: FastAPI runs it in a threadpool, so the blocking urllib
+    call doesn't stall the event loop and we avoid adding an HTTP-client dep.
+    Fails soft: missing key / upstream error -> {"ad": null} (carousel collapses)."""
+    import urllib.request
+    import urllib.parse
+
+    empty = {"ad": None}
+    api_key = os.environ.get("CAS_API_KEY")
+    if not api_key or not placement:
+        return empty
+
+    cas_base = os.environ.get("CAS_BASE", "https://ma.techbiz.ae").rstrip("/")
+    params = {"placement": placement[:60], "format": "json", "source": (source or "4updf")[:60]}
+    if n and n.isdigit():
+        params["n"] = n[:2]
+    if visitor:
+        params["visitor"] = visitor[:128]
+
+    url = f"{cas_base}/api/cas/render?{urllib.parse.urlencode(params)}"
+    try:
+        req = urllib.request.Request(url, headers={"X-API-Key": api_key})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            if resp.status == 204 or resp.status >= 300:
+                return empty
+            body = resp.read().decode("utf-8", "replace")
+        return json.loads(body)
+    except Exception:
+        return empty
+
+
 # ============================================================================
 # Voucher System API
 # ============================================================================
