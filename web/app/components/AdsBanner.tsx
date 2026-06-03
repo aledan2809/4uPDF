@@ -8,8 +8,20 @@ interface AdsBannerProps {
   className?: string;
 }
 
+// Temporary kill-switch: the empty "Ad Space" demo placeholder is hidden
+// site-wide because there is no ad network wired yet — an empty box just
+// looks broken. Re-enable (flip to true, or replace the placeholder JSX with
+// real Google AdSense code) once traffic justifies it (≥100 users/day) — see
+// 4uPDF TODO "Ads strategy — alternare CAS ↔ Google AdSense". The CAS
+// cross-promo carousel + SponsoredBanner upsell are unaffected.
+const ADS_PLACEHOLDER_ENABLED = false;
+
 export default function AdsBanner({ placement = "top", className = "" }: AdsBannerProps) {
   const { user } = useAuth();
+
+  if (!ADS_PLACEHOLDER_ENABLED) {
+    return null;
+  }
 
   // Hide ads for paid users
   if (!shouldShowAds(user)) {
