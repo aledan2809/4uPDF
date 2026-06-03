@@ -82,6 +82,7 @@ const allTools = [
   { name: "Annotate PDF", href: "/tools/annotate-pdf", category: "edit" },
   { name: "Redact PDF", href: "/tools/redact-pdf", category: "edit" },
   // Smart
+  { name: "AI PDF Assistant", href: "/tools/ai-assistant", category: "smart" },
   { name: "OCR PDF", href: "/tools/ocr-pdf", category: "smart" },
   { name: "Searchable PDF", href: "/tools/searchable-pdf", category: "smart" },
   { name: "Split by Text", href: "/tools/split-by-text", category: "smart" },

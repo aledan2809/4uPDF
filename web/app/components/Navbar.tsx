@@ -46,6 +46,7 @@ const toolCategories = [
     name: "Smart Tools",
     href: "/automation",
     items: [
+      { name: "AI PDF Assistant", href: "/tools/ai-assistant" },
       { name: "OCR PDF", href: "/tools/ocr-pdf" },
       { name: "Searchable PDF", href: "/tools/searchable-pdf" },
       { name: "Split by Text", href: "/tools/split-by-text" },
