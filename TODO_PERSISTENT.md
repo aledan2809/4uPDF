@@ -8,6 +8,25 @@
 
 ---
 
+## [x] 🔧 nginx /api migration — deploy Next /api routes (AI + newsletter) — DONE 2026-06-03 (LIVE, commit `8b281f3`)
+
+**Context**: deferat din item C (handoff Master). Cele 3 rute Next NEdeployate (`/api/ai`, `/api/newsletter`, `[...path]` catch-all) erau pe `unify-2026-06`; comitul `f0003d3 deploy-safe` le scosese intenționat ca să livreze CAS fără schimbare nginx.
+
+**Livrat (commit `8b281f3` pe origin/master, deployed VPS2)**:
+- **`/api/newsletter`** — REZOLVAT complet (era 404 silent-drop). Adăugat endpoint Python `POST /api/newsletter` + tabel `newsletter_subscribers` (INSERT OR IGNORE, idempotent pe email, lowercased+trimmed). Rămâne pe Python :3099 → **zero schimbare nginx pentru newsletter**. Verificat: 200 + rând salvat în DB.
+- **`/api/ai`** — livrat pe Next :3098, **auth-gated** (doar useri logați — validează Bearer la Python `/api/auth/me`; 401 altfel; 403-banned blocați). Verificat: nelogat→401, logat→200 `{"content":"PONG","provider":"cohere"}`. Chei AI alimentate în `/var/www/4updf/web/.env.local` (7 providere, fără atingere systemd).
+- **`[...path]`** catch-all proxy + `ai-router` lib + tarball vendored — livrate (dormante sub nginx selectiv; folosite doar în dev).
+- **nginx**: schimbare SELECTIVĂ — DOAR `location = /api/ai → :3098` adăugat în `/etc/nginx/sites-enabled/4updf`. `location /api/ → :3099` (split-ocr NO-TOUCH + toate uneltele PDF + downloads) **neatins**. Backup la `/root/nginx-backups/`.
+- Reconciliat pe linia LIVE (origin/master) → CAS + security/a11y intacte, doar adăugiri, zero ștergeri. L41 vecini toți 200.
+
+**Follow-up-uri descoperite (non-blocker)**:
+1. **nginx hygiene**: `sites-enabled/4updf` e **fișier real, NU symlink** spre `sites-available/4updf` — cele două au divergat (sites-available are 2 blocuri-server, sites-enabled 1). Backup-urile NU trebuie puse în `sites-enabled/` (nginx le încarcă prin `include sites-enabled/*` → conflict server_name). De consolidat cândva.
+2. **ai-router lib nu sare peste provider fără cheie**: a aruncat `Missing API key: COHERE_API_KEY` în loc să treacă la gemini/groq. Cu cheile prezente e moot, dar dacă cheia Cohere expiră, `/api/ai` dă 500 în loc de fallback. Concern AIRouter (shared lib) — de raportat acolo.
+3. **`/api/ai` n-are încă consumator UI** — endpoint pregătit, dar niciun ecran nu-l cheamă încă. Wiring feature = lucru viitor.
+4. **git local**: `master` local (`6b77a17`) a divergat de origin/master (`8b281f3`); deploy-ul s-a făcut prin `git push origin nginx-api-deploy:master`. De reconciliat ramura locală cândva.
+
+---
+
 ## [x] 💰 CAS ad carousel — monetize 4uPDF pageviews — DONE 2026-06-03 (LIVE pe 4updf.com, commit `822114e`)
 
 **STATUS 2026-06-03 — LIVE + ACTIV**: deployat pe prod via split-deploy (master `822114e`). Caruselul randează **HTML-ul real al MA** (pattern identic cu TeInformez — `format=html` + DOMPurify + inject), NU widget re-construit. Proxy server-side în **Python api.py** (`GET /api/cas/render`, nginx /api→:3099) cu cheia din **settings table DB** (`cas_api_key`, ca Stripe — **fără systemd/env**). Verificat pe prod: `/api/cas/render` → 200 + 1886B markup MA cu link-uri `/api/cas/click/`. Hidden pentru paid (shouldShowAds), lazy, fail-soft (204→collapse). Mount pe ToolPageLayout + landing. split-ocr + nginx neatinse. Cheie/salt în DB (rotate: `sqlite3 data/4updf.db "UPDATE settings SET value=... WHERE key='cas_api_key'"`). Vezi `Master/credentials/4updf.env`.
