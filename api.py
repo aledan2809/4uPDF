@@ -247,6 +247,16 @@ def init_database():
             )
         """)
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                source TEXT,
+                ip TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Add last_active, is_banned, and role columns to users (safe ALTER)
         for col, col_def in [
             ("last_active", "TIMESTAMP"),
@@ -759,6 +769,31 @@ def process_pdf_job(job_id, input_path, output_dir, pattern, crop_config, dpi, f
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/api/newsletter")
+async def newsletter_subscribe(request: Request):
+    """Store a newsletter signup. Idempotent on email (INSERT OR IGNORE)."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request body")
+
+    email = (body.get("email") or "").strip().lower()
+    if not email or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", email):
+        raise HTTPException(status_code=400, detail="Invalid email")
+
+    source = (body.get("source") or "")[:120] or None
+    ip = get_client_ip(request)
+
+    with db_session() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR IGNORE INTO newsletter_subscribers (id, email, source, ip) VALUES (?, ?, ?, ?)",
+            (uuid.uuid4().hex, email, source, ip),
+        )
+
+    return {"success": True, "message": "Subscribed successfully"}
 
 
 # ============================================================================
