@@ -1,6 +1,6 @@
 "use client";
 
-import { useAuth } from "../lib/auth";
+import { useAuth, shouldShowAds } from "../lib/auth";
 import Link from "next/link";
 
 interface AdsBannerProps {
@@ -12,7 +12,7 @@ export default function AdsBanner({ placement = "top", className = "" }: AdsBann
   const { user } = useAuth();
 
   // Hide ads for paid users
-  if (user && user.plan !== "free") {
+  if (!shouldShowAds(user)) {
     return null;
   }
 
@@ -50,7 +50,7 @@ export default function AdsBanner({ placement = "top", className = "" }: AdsBann
 export function SponsoredBanner() {
   const { user } = useAuth();
 
-  if (user && user.plan !== "free") {
+  if (!shouldShowAds(user)) {
     return null;
   }
 

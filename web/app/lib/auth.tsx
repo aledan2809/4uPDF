@@ -181,6 +181,14 @@ export function useAuth() {
   return context;
 }
 
+// Single source of truth for ad-surface visibility (AdsBanner, SponsoredBanner,
+// CasCarousel). Anonymous + free-plan users see ads; any paid plan suppresses
+// them. Case-insensitive so a backend label like "FREE" still counts as free.
+export function shouldShowAds(user: User | null): boolean {
+  if (!user) return true;
+  return (user.plan || "free").toLowerCase() === "free";
+}
+
 // Anonymous usage tracking
 export async function trackAnonymousUsage(pages: number = 0): Promise<UsageInfo & { anonymous_id: string }> {
   const fingerprint = await generateFingerprint();

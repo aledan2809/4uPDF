@@ -3,6 +3,7 @@ import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
 import FAQAccordion from "./components/FAQAccordion";
 import FAQSchema from "./components/FAQSchema";
+import CasCarousel from "./components/CasCarousel";
 
 const popularTools = [
   {
@@ -319,6 +320,13 @@ export default function HomePage() {
                 </p>
               </div>
             </div>
+          </div>
+        </section>
+
+        {/* Cross-promo carousel (CAS, consumed from MarketingAutomation) */}
+        <section className="py-8 bg-gray-950">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+            <CasCarousel placement="WEBSITE_INFEED" />
           </div>
         </section>
 

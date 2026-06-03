@@ -5,6 +5,7 @@ import FAQAccordion from "./FAQAccordion";
 import FAQSchema from "./FAQSchema";
 import AdsBanner, { SponsoredBanner } from "./AdsBanner";
 import { UsageBanner } from "./UpgradePrompt";
+import CasCarousel from "./CasCarousel";
 
 interface FAQItem {
   question: string;
@@ -86,6 +87,7 @@ export default function ToolPageLayout({
           <AdsBanner placement="top" />
           {children}
           <SponsoredBanner />
+          <CasCarousel placement="WEBSITE_INFEED" className="mt-6" />
         </div>
       </section>
 
