@@ -185,6 +185,7 @@ export default function AiAssistantPage() {
     <ToolPageLayout
       title="AI PDF Assistant"
       description="Ask anything about working with PDFs and get instant guidance plus a recommendation for the right 4uPDF tool — from compressing and merging to converting and extracting data."
+      hideAdBanners
       howItWorks={howItWorks}
       benefits={benefits}
       faqs={faqs}

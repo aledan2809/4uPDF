@@ -27,6 +27,11 @@ interface ToolPageLayoutProps {
   title: string;
   description: string;
   children: ReactNode;
+  // Hide the placeholder ad banners (top AdsBanner + SponsoredBanner) for
+  // pages where they clutter the experience (e.g. the AI chat). The CAS
+  // cross-promo carousel + upgrade prompt are intentionally kept. Default
+  // false preserves the standard ad stack on every existing tool page.
+  hideAdBanners?: boolean;
   howItWorks?: HowItWorksStep[];
   benefits?: string[];
   faqs?: FAQItem[];
@@ -61,6 +66,7 @@ export default function ToolPageLayout({
   title,
   description,
   children,
+  hideAdBanners = false,
   howItWorks = defaultHowItWorks,
   benefits = defaultBenefits,
   faqs = [],
@@ -84,9 +90,9 @@ export default function ToolPageLayout({
       <section className="py-8 bg-gray-950">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
           <UsageBanner />
-          <AdsBanner placement="top" />
+          {!hideAdBanners && <AdsBanner placement="top" />}
           {children}
-          <SponsoredBanner />
+          {!hideAdBanners && <SponsoredBanner />}
           <CasCarousel placement="WEBSITE_INFEED" className="mt-6" />
         </div>
       </section>
