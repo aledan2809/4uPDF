@@ -314,6 +314,10 @@ def init_database():
             "rate_limit": "100",
             "max_file_size_mb": "500",
             "maintenance_mode": "false",
+            # CAS (Carusel de Ads) consumer config — proxied to MA, key never in client
+            "cas_api_key": "",
+            "cas_salt": "",
+            "cas_base": "https://ma.techbiz.ae",
         }
 
         for key, value in default_settings.items():
@@ -1199,41 +1203,52 @@ def cas_render_proxy(
     visitor: str = "",
 ):
     """Server-side proxy for the CAS (Carusel de Ads) render endpoint in
-    MarketingAutomation (ma.techbiz.ae).
+    MarketingAutomation (ma.techbiz.ae) — mirrors the TeInformez integration.
 
-    MA's /api/cas/render is gated by CAS_API_KEY in production. The key must NOT
-    live in the browser bundle, so the CasCarousel client calls this same-origin
-    endpoint (nginx routes /api -> this backend) which attaches X-API-Key
-    server-side and forwards to MA. Track + click are keyless (browser-direct).
+    MA's /api/cas/render is gated by an API key. The key must NOT live in the
+    browser bundle, so the client calls this same-origin endpoint (nginx routes
+    /api -> this backend) which attaches X-API-Key server-side and returns MA's
+    own ad HTML (the actual carousel markup). The frontend sanitizes it
+    (DOMPurify) and injects it. The visitor token is hashed server-side (salt) so
+    MA can dedupe rotation per visitor without us leaking a raw id.
+
+    Config (TeInformez pattern): key + salt come from the settings table
+    (get_setting), with env fallback — no systemd/.env change needed.
 
     Sync def on purpose: FastAPI runs it in a threadpool, so the blocking urllib
     call doesn't stall the event loop and we avoid adding an HTTP-client dep.
-    Fails soft: missing key / upstream error -> {"ad": null} (carousel collapses)."""
+    Fails soft: missing key / upstream error / no ad -> 204 (carousel collapses)."""
     import urllib.request
     import urllib.parse
+    from fastapi.responses import HTMLResponse, Response
 
-    empty = {"ad": None}
-    api_key = os.environ.get("CAS_API_KEY")
+    def _empty():
+        return Response(status_code=204)
+
+    api_key = get_setting("cas_api_key", os.environ.get("CAS_API_KEY", ""))
     if not api_key or not placement:
-        return empty
+        return _empty()
 
-    cas_base = os.environ.get("CAS_BASE", "https://ma.techbiz.ae").rstrip("/")
-    params = {"placement": placement[:60], "format": "json", "source": (source or "4updf")[:60]}
+    cas_base = get_setting("cas_base", os.environ.get("CAS_BASE", "https://ma.techbiz.ae")).rstrip("/")
+    params = {"placement": placement[:60], "format": "html", "source": (source or "4updf")[:60]}
     if n and n.isdigit():
         params["n"] = n[:2]
     if visitor:
-        params["visitor"] = visitor[:128]
+        salt = get_setting("cas_salt", os.environ.get("CAS_SALT", ""))
+        params["visitor"] = hashlib.sha256((visitor[:200] + salt).encode("utf-8")).hexdigest()
 
     url = f"{cas_base}/api/cas/render?{urllib.parse.urlencode(params)}"
     try:
         req = urllib.request.Request(url, headers={"X-API-Key": api_key})
         with urllib.request.urlopen(req, timeout=8) as resp:
-            if resp.status == 204 or resp.status >= 300:
-                return empty
+            if resp.status != 200:
+                return _empty()
             body = resp.read().decode("utf-8", "replace")
-        return json.loads(body)
+        if not body.strip():
+            return _empty()
+        return HTMLResponse(content=body, headers={"Cache-Control": "private, max-age=300"})
     except Exception:
-        return empty
+        return _empty()
 
 
 # ============================================================================
