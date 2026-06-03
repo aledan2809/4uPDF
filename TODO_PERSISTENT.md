@@ -8,6 +8,24 @@
 
 ---
 
+## [ ] 💰 Ads strategy — alternare CAS ↔ Google AdSense pe pagini (GATED: ≥100 useri/zi)
+
+**Poartă obligatorie**: NU începe până 4updf.com NU atinge **≥100 useri/zi** susținut (verifică în analytics/`/api/analytics` sau dashboard SuperAdmin înainte de orice lucru). Sub prag = nu merită efortul + AdSense oricum cere trafic real pentru aprobare.
+
+**Context (2026-06-03)**: pe ecranul **AI PDF Assistant** (`/tools/ai-assistant`) am scos placeholder-ele de Ad (AdsBanner top + SponsoredBanner) pentru un chat curat — păstrat doar caruselul **CAS** jos + upgrade prompt (commit `4a40935`, prop `hideAdBanners` în `ToolPageLayout`, default off pe restul). Asta a deschis discuția despre strategia de reclame.
+
+**Idee user (de implementat DUPĂ prag)**: monetizare mixtă — **alternare CAS ↔ Google AdSense în funcție de pagina pe care intră userul**, ca să nu fie doar cross-promo intern. Ex: pe o pagină randezi caruselul CAS actual, pe alta un carusel Google AdSense → userul care trece prin >1 pagină vede ambele tipuri (CAS pe pagina A, Google Ads pe pagina B), diversificând atât venitul cât și experiența.
+
+**Schiță (de detaliat la implementare)**:
+- Mecanism de rotație/alocare per-pagină (ex. deterministic pe slug, sau A/B) care decide: surface CAS vs surface AdSense.
+- AdSense necesită cont aprobat + script `adsbygoogle` + slot IDs + consimțământ (vezi itemul **consent gate** — GDPR/CMP obligatoriu înainte de a încărca AdSense în UE).
+- Generalizează prin `ToolPageLayout` (un nou slot de ad configurabil), NU special-case per pagină — păstrează `hideAdBanners` existent.
+- Respectă `shouldShowAds` (paid users = fără reclame) pe ambele tipuri.
+
+**Pre-cerințe**: (1) ≥100 useri/zi verificat; (2) consent gate / CMP live (AdSense + GDPR); (3) cont AdSense aprobat.
+
+---
+
 ## [x] 🔧 nginx /api migration — deploy Next /api routes (AI + newsletter) — DONE 2026-06-03 (LIVE, commit `8b281f3`)
 
 **Context**: deferat din item C (handoff Master). Cele 3 rute Next NEdeployate (`/api/ai`, `/api/newsletter`, `[...path]` catch-all) erau pe `unify-2026-06`; comitul `f0003d3 deploy-safe` le scosese intenționat ca să livreze CAS fără schimbare nginx.
