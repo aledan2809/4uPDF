@@ -46,9 +46,11 @@
 | Privacy | "nu iese din browser" (vânzare + scapi GDPR upload) | upload + ștergere rapidă |
 | Extra | 1 regiune, PNG | **batch** (aceeași zonă pe N pagini / toate figurile), OCR caption, fundal transparent/auto-trim, multi-format, SVG vectorial |
 
-### Basic — IN PROGRESS (se construiește în sesiunea 2026-06-03; flip la DONE după deploy)
-- Pagină `/tools/extract-figure` — client-side complet: upload PDF → pdf.js randează pagina pe canvas → user trage un dreptunghi → exportă regiunea ca PNG. Multi-page nav. **Fără login, fără upload** (commodity free + SEO + funnel).
-- pdf.js worker self-hosted (`/public/pdf.worker.min.mjs` copiat la build via `prebuild`, version-matched — fără CDN, CSP-friendly).
+### Basic — DONE 2026-06-03 (LIVE, commit `642733d`)
+- Pagină `/tools/extract-figure` — client-side complet: upload PDF → pdf.js v6 randează pagina pe canvas → user trage un dreptunghi → exportă regiunea ca PNG. Multi-page nav. **Fără login, fără upload** (commodity free + SEO + funnel). Discoverable: Navbar grup Convert + homepage tools.
+- pdf.js worker self-hosted (`/public/pdf.worker.min.mjs` copiat la build via `predev`/`prebuild` din `scripts/copy-pdf-worker.mjs`, version-matched — fără CDN, CSP-friendly; build eșuează loud dacă lipsește).
+- `/review` high → 4 fix-uri reale: cancel render în zbor înainte de doc swap (race), try/catch pointer-capture, clamp anti-rounding la export, exit(1) loud pe worker lipsă. Restul findings = false-positives (transform high-DPI = rețeta oficială pdf.js).
+- **Verificat**: tsc 0, build VPS 0, pagina 200 + randează, `/pdf.worker.min.mjs` 200 same-origin, split-ocr+vecini 200. **NEverificat headless**: fluxul interactiv real (render→drag→export PNG) — de testat în browser (construit pe API-ul documentat pdf.js v6 + typechecked).
 
 ### Advanced — PENDING (server-side, paid)
 1. **Endpoint** `POST /api/extract-region` în `api.py` (NU split-ocr): `{file, page, rect:[x0,y0,x1,y1] în coord pagină, dpi}` → `fitz.get_pixmap(clip=Rect, matrix=zoom(dpi))` → PNG high-DPI. Gate pe `PlanLimits.smart_tools` sau tier paid.
