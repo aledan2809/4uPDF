@@ -14,6 +14,8 @@
 
 **Context (2026-06-03)**: pe ecranul **AI PDF Assistant** (`/tools/ai-assistant`) am scos placeholder-ele de Ad (AdsBanner top + SponsoredBanner) pentru un chat curat — păstrat doar caruselul **CAS** jos + upgrade prompt (commit `4a40935`, prop `hideAdBanners` în `ToolPageLayout`, default off pe restul). Asta a deschis discuția despre strategia de reclame.
 
+**Stare curentă (2026-06-03, commit `da0edc7`)**: caseta goală **"Advertisement / Ad Space"** (componenta `AdsBanner`) e ascunsă **SITE-WIDE**, temporar, fiindcă nu există încă rețea de reclame → un box gol arăta rupt. Mecanism: flag `ADS_PLACEHOLDER_ENABLED = false` în `web/app/components/AdsBanner.tsx`. **Revenire la ≥100 useri**: fie flip la `true`, fie (recomandat) înlocuiește JSX-ul placeholder cu codul real Google AdSense direct în componentă. `SponsoredBanner` ("Upgrade to remove ads") + caruselul CAS + banner-ul "Create an account" rămân ACTIVE pe tot site-ul.
+
 **Idee user (de implementat DUPĂ prag)**: monetizare mixtă — **alternare CAS ↔ Google AdSense în funcție de pagina pe care intră userul**, ca să nu fie doar cross-promo intern. Ex: pe o pagină randezi caruselul CAS actual, pe alta un carusel Google AdSense → userul care trece prin >1 pagină vede ambele tipuri (CAS pe pagina A, Google Ads pe pagina B), diversificând atât venitul cât și experiența.
 
 **Schiță (de detaliat la implementare)**:
