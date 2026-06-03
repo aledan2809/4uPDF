@@ -8,9 +8,11 @@
 
 ---
 
-## [~] 💰 CAS ad carousel — monetize 4uPDF pageviews (creat 2026-06-03; DEV-COMPLETE 2026-06-03, deploy deferat la item C)
+## [x] 💰 CAS ad carousel — monetize 4uPDF pageviews — DONE 2026-06-03 (LIVE pe 4updf.com, commit `822114e`)
 
-**STATUS 2026-06-03**: cod livrat + verificat runtime local; **deploy deferat** la sesiunea de unify git (item C din handoff Master), care va face build+deploy consolidat + True E2E [10].
+**STATUS 2026-06-03 — LIVE + ACTIV**: deployat pe prod via split-deploy (master `822114e`). Caruselul randează **HTML-ul real al MA** (pattern identic cu TeInformez — `format=html` + DOMPurify + inject), NU widget re-construit. Proxy server-side în **Python api.py** (`GET /api/cas/render`, nginx /api→:3099) cu cheia din **settings table DB** (`cas_api_key`, ca Stripe — **fără systemd/env**). Verificat pe prod: `/api/cas/render` → 200 + 1886B markup MA cu link-uri `/api/cas/click/`. Hidden pentru paid (shouldShowAds), lazy, fail-soft (204→collapse). Mount pe ToolPageLayout + landing. split-ocr + nginx neatinse. Cheie/salt în DB (rotate: `sqlite3 data/4updf.db "UPDATE settings SET value=... WHERE key='cas_api_key'"`). Vezi `Master/credentials/4updf.env`.
+
+**[~]→[x] note**: inițial dezvoltat ca rută Next + JSON custom carousel; pivotat la pattern-ul TeInformez (verificat la cererea user) — HTML MA + proxy Python + cheie-în-DB, ceea ce a rezolvat și activarea fără systemd.
 
 **Ce s-a livrat** (branch `deployed-work`):
 - `web/app/components/CasCarousel.tsx` — carusel consumer CAS: lazy (IntersectionObserver), fetch paralel pe sloturi, rotație auto cu pauză (hover/focus + buton pause/play WCAG 2.2.2 + prefers-reduced-motion), impression beacon (1×/trackingCode), click via `clickUrl`, a11y (aria-live, dots), hidden pentru paid users, fail-soft (nu crapă pagina niciodată).
@@ -44,7 +46,7 @@
 
 ---
 
-## [~] 🎯 Identifică vizitatorul recurent + convertește-l în cont (creat 2026-06-03; DEV-COMPLETE 2026-06-03, deploy deferat la item C)
+## [x] 🎯 Identifică vizitatorul recurent + convertește-l în cont — DONE 2026-06-03 (LIVE, commit `822114e`)
 
 **STATUS 2026-06-03**: cod livrat + verificat (build/tsc + SQL unit-test); **deploy deferat** la sesiunea de unify git (item C), care va face deploy + True E2E [10].
 
