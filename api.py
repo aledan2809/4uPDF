@@ -1128,6 +1128,63 @@ async def get_usage_status(
         }
 
 
+@app.post("/api/track/returning")
+async def get_returning_status(
+    request: Request,
+    fingerprint: str = Form(""),
+    local_token: str = Form(""),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    """Lightweight returning-visitor signal for anonymous users.
+
+    Returns persistent cross-day totals from anonymous_usage so the frontend can
+    decide whether to show a soft account-conversion prompt. Unlike
+    /api/track/usage (which filters to today's row), this aggregates the visitor's
+    whole history by local_token (stable across IP changes) OR composite_hash.
+    Authenticated users get returning=False (they already have an account)."""
+    user = get_current_user(credentials)
+    if user:
+        return {"returning": False, "authenticated": True}
+
+    ip = get_client_ip(request)
+    composite_hash = generate_composite_hash(ip, fingerprint, local_token)
+
+    with db_session() as conn:
+        cursor = conn.cursor()
+        if local_token:
+            cursor.execute("""
+                SELECT COALESCE(SUM(total_pages_all_time), 0) AS total,
+                       MIN(first_seen) AS first_seen
+                FROM anonymous_usage
+                WHERE local_token = ? OR composite_hash = ?
+            """, (local_token, composite_hash))
+        else:
+            cursor.execute("""
+                SELECT COALESCE(SUM(total_pages_all_time), 0) AS total,
+                       MIN(first_seen) AS first_seen
+                FROM anonymous_usage
+                WHERE composite_hash = ?
+            """, (composite_hash,))
+        row = cursor.fetchone()
+
+    total = int(row["total"] or 0) if row else 0
+    first_seen = row["first_seen"] if row and row["first_seen"] else None
+    days_since_first = 0
+    if first_seen:
+        try:
+            fs = datetime.fromisoformat(str(first_seen).replace("Z", ""))
+            days_since_first = max(0, (datetime.utcnow() - fs).days)
+        except Exception:
+            days_since_first = 0
+
+    return {
+        "authenticated": False,
+        "total_pages_all_time": total,
+        "first_seen": first_seen,
+        "days_since_first": days_since_first,
+    }
+
+
 # ============================================================================
 # Voucher System API
 # ============================================================================

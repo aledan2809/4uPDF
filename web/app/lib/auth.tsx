@@ -228,6 +228,56 @@ export async function getUsageStatus(token?: string | null): Promise<UsageInfo &
   return response.json();
 }
 
+export interface ReturningStatus {
+  authenticated: boolean;
+  total_pages_all_time?: number;
+  first_seen?: string | null;
+  days_since_first?: number;
+}
+
+// Persistent (cross-day) returning-visitor signal for anonymous users. Used by
+// the soft account-conversion prompt. Returns authenticated:true for logged-in.
+export async function getReturningStatus(token?: string | null): Promise<ReturningStatus> {
+  try {
+    const fingerprint = await generateFingerprint();
+    const localToken = getOrCreateLocalToken();
+    const formData = new FormData();
+    formData.append("fingerprint", fingerprint);
+    formData.append("local_token", localToken);
+    const headers: HeadersInit = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const response = await fetch(`${API_URL}/api/track/returning`, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+    if (!response.ok) return { authenticated: false };
+    return await response.json();
+  } catch {
+    return { authenticated: false };
+  }
+}
+
+// Fire-and-forget analytics event (reuses /api/analytics/track event_type).
+export function trackConversionEvent(eventType: string, page?: string): void {
+  try {
+    const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    fetch(`${API_URL}/api/analytics/track`, {
+      method: "POST",
+      headers,
+      keepalive: true,
+      body: JSON.stringify({
+        event_type: eventType,
+        page: page || (typeof window !== "undefined" ? window.location.pathname : ""),
+      }),
+    }).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
+
 function getOrCreateLocalToken(): string {
   if (typeof window === "undefined") return "";
 

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AuthProvider } from "./lib/auth";
 import CookieConsent from "./components/CookieConsent";
+import ReturningVisitorPrompt from "./components/ReturningVisitorPrompt";
 import Script from "next/script";
 
 const BASE_URL = "https://4updf.com";
@@ -111,7 +112,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </Script>
       </head>
       <body className="bg-gray-950 text-gray-100 min-h-screen antialiased">
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          {children}
+          <ReturningVisitorPrompt />
+        </AuthProvider>
         <CookieConsent />
         <Script id="heartbeat" strategy="afterInteractive">
           {`

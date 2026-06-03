@@ -44,7 +44,27 @@
 
 ---
 
-## [ ] 🎯 Identifică vizitatorul recurent + convertește-l în cont (creat 2026-06-03)
+## [~] 🎯 Identifică vizitatorul recurent + convertește-l în cont (creat 2026-06-03; DEV-COMPLETE 2026-06-03, deploy deferat la item C)
+
+**STATUS 2026-06-03**: cod livrat + verificat (build/tsc + SQL unit-test); **deploy deferat** la sesiunea de unify git (item C), care va face deploy + True E2E [10].
+
+**Constatare cheie**: anonim și cont-free au **aceleași limite** (200 pag/zi, 50MB, ads — `api.py PLAN_LIMITS["free"]` se aplică și anonimilor). Deci momeala onestă NU e "mai multe pagini gratis", ci **persistență cross-device + drumul spre planuri fără reclame** (fișiere mai mari / batch vin din planuri plătite). Copy-ul reflectă asta — fără claim înșelător.
+
+**Ce s-a livrat** (branch `deployed-work`):
+- `api.py` — endpoint nou `POST /api/track/returning` (additiv): agregă `total_pages_all_time` + `MIN(first_seen)` din `anonymous_usage` pe `local_token` (stabil cross-IP) OR `composite_hash`; întoarce `days_since_first`. Logged-in → `returning:false`.
+- `web/app/lib/auth.tsx` — `getReturningStatus()` (reutilizează fingerprint-ul existent) + `trackConversionEvent()` (event_type pe `/api/analytics/track`).
+- `web/app/components/ReturningVisitorPrompt.tsx` — toast soft non-blocking (bottom), personalizat ("Ai procesat deja N pagini"), CTA → /signup (pasează first-touch `_4u_acq` la register, deja wired). Anti-annoyance: 1×/sesiune + cooldown escaladat la fiecare show (3→7→30 zile) + 14/60 zile la dismiss/click. **GDPR**: detecția (fingerprint) + tracking + afișare rulează DOAR dacă `cookieConsent.analytics === true` (rezolvă și coliziunea cu cookie-banner). Returning = total≥1 && (≥3 pagini SAU first_seen ≥1 zi). Suprimat pe /split-ocr + /superadmin.
+- Mount: root `layout.tsx` în AuthProvider.
+
+**Verificat**: tsc 0 erori · build exit 0 (102 pagini) · SQL unit-test (agregare local_token=8, composite-only=5, vizitator nou=0/not-returning, izolație) · `/review` correctness+quality (fix-uri aplicate: GDPR consent gate, count double-increment, race async `active`-flag, cooldown-on-show anti-nag, returning≥1, rol a11y `complementary`, copy onest).
+
+**Măsurare**: `conversion_prompt_shown/_clicked/_dismissed` în `analytics_events` (event_type) → SuperAdmin analytics.
+
+**⚠️ Follow-up (separat, NU blochează)**: pageview-tracker-ul global din `layout.tsx` + GA fire fără consent gate (pre-existent, nu introdus de mine). Merită un fix ecosystem-wide pe același flag `cookieConsent.analytics`. De evaluat în item C (reconcile layout) sau sesiune dedicată — posibil intenționat ca first-party legitimate-interest, de aceea NU l-am atins silent.
+
+---
+
+## [archive] 🎯 Identifică vizitatorul recurent — cerere originală (creat 2026-06-03)
 
 **Cerere user**: cum identificăm un user care a mai fost pe site și încercăm să-l convertim cu cont?
 
