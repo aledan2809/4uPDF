@@ -1,6 +1,4 @@
 import { Metadata } from "next";
-import Navbar from "../../components/Navbar";
-import Footer from "../../components/Footer";
 
 export const metadata: Metadata = {
   title: "Redact PDF - Black Out Sensitive Text Online Free | 4uPDF",
@@ -23,11 +21,5 @@ export default function RedactPDFLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return (
-    <>
-      <Navbar />
-      <main className="min-h-screen bg-gray-950">{children}</main>
-      <Footer />
-    </>
-  );
+  return <>{children}</>;
 }
