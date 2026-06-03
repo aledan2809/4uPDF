@@ -22,7 +22,7 @@
 **Follow-up-uri descoperite (non-blocker)**:
 1. **nginx hygiene**: `sites-enabled/4updf` e **fișier real, NU symlink** spre `sites-available/4updf` — cele două au divergat (sites-available are 2 blocuri-server, sites-enabled 1). Backup-urile NU trebuie puse în `sites-enabled/` (nginx le încarcă prin `include sites-enabled/*` → conflict server_name). De consolidat cândva.
 2. **ai-router lib nu sare peste provider fără cheie**: a aruncat `Missing API key: COHERE_API_KEY` în loc să treacă la gemini/groq. Cu cheile prezente e moot, dar dacă cheia Cohere expiră, `/api/ai` dă 500 în loc de fallback. Concern AIRouter (shared lib) — de raportat acolo.
-3. **`/api/ai` n-are încă consumator UI** — endpoint pregătit, dar niciun ecran nu-l cheamă încă. Wiring feature = lucru viitor.
+3. ~~**`/api/ai` n-are încă consumator UI**~~ — **DONE 2026-06-03 (LIVE, commit `8062c7a`)**. Ecran nou **AI PDF Assistant** la `/tools/ai-assistant` (chat text-only, login-gated, Bearer→`/api/ai`, system-prompt ghidează spre uneltele 4uPDF, istoric plafonat 12 msg + input cap 2000, a11y `role=log`/`aria-live`, guard atomic anti-double-submit din `/review` high). Discoverability: Navbar Smart Tools + homepage tools grid. Verificat prod: pagina 200, split-ocr+core 200, `/api/ai` nelogat→401, **round-trip real logat→200** (`Compress PDF` recommended, provider cohere). Zero atingere split-ocr/nginx/systemd/Python. Build VPS exit 0, `4updf-web` restart only (api neatins).
 4. **git local**: `master` local (`6b77a17`) a divergat de origin/master (`8b281f3`); deploy-ul s-a făcut prin `git push origin nginx-api-deploy:master`. De reconciliat ramura locală cândva.
 
 ---
