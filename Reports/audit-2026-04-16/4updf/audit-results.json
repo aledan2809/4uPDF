@@ -1,0 +1,351 @@
+{
+  "audit_date": "2026-04-16",
+  "re_audit_dates": ["2026-04-18"],
+  "project": "4uPDF",
+  "auditor": "ML2 Wave 3 Automated Audit + Re-audit (Round 1-4)",
+  "scope": "All modules except OCR-split (NO-TOUCH)",
+  "total_findings": 36,
+  "summary": {
+    "critical": 7,
+    "high": 15,
+    "medium": 10,
+    "low": 4
+  },
+  "findings": [
+    {
+      "id": "VULN-001",
+      "severity": "Critical",
+      "location": "api.py:2366-2372",
+      "description": "Path traversal vulnerability in /api/download/{filename} endpoint. The filename parameter was not validated against path traversal attacks.",
+      "fix_suggestion": "Validate filename to only allow simple names, resolve paths and verify they stay within the output directory.",
+      "status": "FIXED",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-002",
+      "severity": "Critical",
+      "location": "api.py:2375-2399",
+      "description": "Path traversal / directory listing vulnerability in /api/browse endpoint. No restriction on which directories could be browsed.",
+      "fix_suggestion": "Restrict browsing to the application root directory tree.",
+      "status": "FIXED",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-003",
+      "severity": "Critical",
+      "location": "api.py:2402-2423",
+      "description": "Path traversal in /api/download-all endpoint. The output_dir parameter could be set to any filesystem path.",
+      "fix_suggestion": "Restrict output_dir to application root directory.",
+      "status": "FIXED",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-004",
+      "severity": "Critical",
+      "location": "api.py:2521,2599,2616-2620",
+      "description": "Unvalidated integer parsing in split operations. User input converted to int() without try/except.",
+      "fix_suggestion": "Wrap int() conversions in try/except ValueError, validate ranges and bounds.",
+      "status": "FIXED",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-005",
+      "severity": "Critical",
+      "location": "api.py:3972-3997",
+      "description": "Path traversal vulnerability in the SECOND download endpoint (download_output). Not fixed in first audit round.",
+      "fix_suggestion": "Add identical path traversal prevention.",
+      "status": "FIXED",
+      "audit_round": 2
+    },
+    {
+      "id": "VULN-006",
+      "severity": "High",
+      "location": "api.py:2522 (and 2864)",
+      "description": "Negative index vulnerability in merge order parsing. Only upper bound checked.",
+      "fix_suggestion": "Add lower bound check: 0 <= i < len(saved_files).",
+      "status": "FIXED",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-007",
+      "severity": "High",
+      "location": "api.py (53 locations)",
+      "description": "Bare except: clauses throughout codebase silently suppress all exceptions.",
+      "fix_suggestion": "Replace bare 'except:' with 'except Exception:'.",
+      "status": "FIXED",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-008",
+      "severity": "High",
+      "location": "api.py (43 locations)",
+      "description": "Error messages expose internal details via raise HTTPException(status_code=500, detail=str(e)).",
+      "fix_suggestion": "Log the exception server-side and return a generic error message.",
+      "status": "FIXED",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-009",
+      "severity": "High",
+      "location": "api.py:67-74",
+      "description": "Overly permissive CORS configuration: allow_headers=['*'] with allow_credentials=True.",
+      "fix_suggestion": "Specify explicit allowed headers.",
+      "status": "FIXED",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-010",
+      "severity": "High",
+      "location": "api.py:2316-2363",
+      "description": "Missing authentication on /api/status/{job_id} and /api/jobs endpoints.",
+      "fix_suggestion": "Add authentication or restrict job status to job creator.",
+      "status": "ACCEPTED_TEMPORARY",
+      "justification": "Job IDs are random hex (8 chars = 4B+ possibilities). Endpoints expose only processing status.",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-011",
+      "severity": "High",
+      "location": "api.py:2372",
+      "description": "Filename not sanitized in FileResponse Content-Disposition header.",
+      "fix_suggestion": "Use Path().name to sanitize the filename.",
+      "status": "FIXED",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-012",
+      "severity": "High",
+      "location": "api.py:5842, api.py:6238",
+      "description": "doc.page_count accessed after doc.close() in archive/invoice processing.",
+      "fix_suggestion": "Store page_count before calling doc.close().",
+      "status": "FIXED",
+      "audit_round": 2
+    },
+    {
+      "id": "VULN-013",
+      "severity": "High",
+      "location": "api.py:5729",
+      "description": "The /api/sign-pdf endpoint error handler leaked internal error details.",
+      "fix_suggestion": "Replace with logger.exception() + generic error message.",
+      "status": "FIXED",
+      "audit_round": 2
+    },
+    {
+      "id": "VULN-014",
+      "severity": "High",
+      "location": "api.py:447-452",
+      "description": "is_banned flag not checked when authenticated users access endpoints. Banned user's JWT remains valid for 7 days.",
+      "fix_suggestion": "Add ban check in get_current_user_required().",
+      "status": "FIXED",
+      "audit_round": 2
+    },
+    {
+      "id": "VULN-015",
+      "severity": "High",
+      "location": "routes.py (20 locations)",
+      "description": "Error messages in routes.py expose internal details via raise HTTPException(status_code=500, detail=f'...{str(e)}'). All 20 error handlers in routes.py leaked raw exception messages to clients. The previous audit only fixed api.py but missed routes.py entirely.",
+      "fix_suggestion": "Add logger and replace all 20 instances with logger.exception() + generic error message.",
+      "status": "FIXED",
+      "audit_round": 3
+    },
+    {
+      "id": "VULN-016",
+      "severity": "High",
+      "location": "api.py:2516-2523 (save_upload_file)",
+      "description": "save_upload_file() has no file size validation. Many api.py endpoints call save_upload_file() before any size check, allowing arbitrarily large files to be written to disk and potentially exhausting storage.",
+      "fix_suggestion": "Add streaming size validation with a hard limit in save_upload_file().",
+      "status": "FIXED",
+      "audit_round": 3
+    },
+    {
+      "id": "VULN-017",
+      "severity": "Medium",
+      "location": "api.py:254,266",
+      "description": "SQL column names interpolated via f-strings in ALTER TABLE statements.",
+      "fix_suggestion": "Whitelist column names explicitly.",
+      "status": "ACCEPTED_TEMPORARY",
+      "justification": "Values are hardcoded in source code tuples, not from user input.",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-018",
+      "severity": "Medium",
+      "location": "api.py:108",
+      "description": "SQLite check_same_thread=False in multithreaded FastAPI context.",
+      "fix_suggestion": "Use a connection pool or per-request connections.",
+      "status": "ACCEPTED_TEMPORARY",
+      "justification": "db_session() creates new connections per operation.",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-019",
+      "severity": "Medium",
+      "location": "api.py:84",
+      "description": "JWT_SECRET_KEY randomly generated if not in environment.",
+      "fix_suggestion": "Require JWT_SECRET_KEY in environment.",
+      "status": "ACCEPTED_TEMPORARY",
+      "justification": "Production sets JWT_SECRET_KEY via .env file.",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-020",
+      "severity": "Medium",
+      "location": "api.py:458-461, rate_limiter.py:24-27",
+      "description": "X-Forwarded-For IP extraction without proxy validation.",
+      "fix_suggestion": "Only trust X-Forwarded-For behind known proxy.",
+      "status": "ACCEPTED_TEMPORARY",
+      "justification": "Production runs behind nginx.",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-021",
+      "severity": "Medium",
+      "location": "api.py:1459-1465",
+      "description": "Admin settings endpoint accepts legacy admin_key parameter.",
+      "fix_suggestion": "Deprecate admin_key parameter.",
+      "status": "ACCEPTED_TEMPORARY",
+      "justification": "verify_superadmin() handles empty string safely.",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-022",
+      "severity": "Medium",
+      "location": "api.py:6508-6509",
+      "description": "Batch processing limits file count (100) but not total file size.",
+      "fix_suggestion": "Add total batch size limit.",
+      "status": "ACCEPTED_TEMPORARY",
+      "justification": "Individual file size limited by plan.",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-023",
+      "severity": "Medium",
+      "location": "api.py:609-611",
+      "description": "Three global job-tracking dicts grow unbounded over time.",
+      "fix_suggestion": "Add job eviction to cleanup_old_files().",
+      "status": "FIXED",
+      "audit_round": 2
+    },
+    {
+      "id": "VULN-024",
+      "severity": "Medium",
+      "location": "routes.py:1084",
+      "description": "Resource leak in detect-type endpoint: fitz.open() called inline in dict constructor (len(fitz.open(...))) without ever closing the document handle. Each request leaks a file descriptor.",
+      "fix_suggestion": "Store document in variable, get page count, close document.",
+      "status": "FIXED",
+      "audit_round": 3
+    },
+    {
+      "id": "VULN-025",
+      "severity": "Medium",
+      "location": "api.py:4957-4961 (flatten endpoint)",
+      "description": "Flatten PDF endpoint does not actually flatten annotations. It only sets the IS_HIDDEN flag on annotations, which can be easily reversed. A proper flatten should render annotations into page content and remove them.",
+      "fix_suggestion": "Use redaction-based approach to burn annotations into page content.",
+      "status": "FIXED",
+      "audit_round": 3
+    },
+    {
+      "id": "VULN-026",
+      "severity": "Medium",
+      "location": "api.py:3564",
+      "description": "Import error handler in powerpoint-to-pdf endpoint leaks the ImportError exception message to clients, revealing which Python packages are missing on the server.",
+      "fix_suggestion": "Return static error message without exception details.",
+      "status": "FIXED",
+      "audit_round": 3
+    },
+    {
+      "id": "VULN-027",
+      "severity": "Medium",
+      "location": "api.py:5741-5742",
+      "description": "Duplicate imports in codebase.",
+      "fix_suggestion": "Remove duplicate import block.",
+      "status": "FIXED",
+      "audit_round": 2
+    },
+    {
+      "id": "VULN-028",
+      "severity": "Low",
+      "location": "api.py (multiple locations)",
+      "description": "JSON parsing with generic exception handling.",
+      "fix_suggestion": "Catch json.JSONDecodeError specifically.",
+      "status": "ACCEPTED_TEMPORARY",
+      "justification": "Valid fallback behavior exists.",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-029",
+      "severity": "Low",
+      "location": "api.py (global)",
+      "description": "No HSTS headers configured in FastAPI application.",
+      "fix_suggestion": "Add HSTS header middleware.",
+      "status": "ACCEPTED_TEMPORARY",
+      "justification": "HSTS configured at nginx level.",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-030",
+      "severity": "Low",
+      "location": "api.py:1346",
+      "description": "Stripe webhook signature verification depends on stripe_webhook_secret being configured.",
+      "fix_suggestion": "Add startup validation.",
+      "status": "ACCEPTED_TEMPORARY",
+      "justification": "Fails closed if not configured.",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-031",
+      "severity": "Low",
+      "location": "api.py (various endpoints)",
+      "description": "Some public endpoints lack rate limiting.",
+      "fix_suggestion": "Apply rate limiting middleware.",
+      "status": "ACCEPTED_TEMPORARY",
+      "justification": "Low-risk endpoints; nginx provides baseline protection.",
+      "audit_round": 1
+    },
+    {
+      "id": "VULN-032",
+      "severity": "Critical",
+      "location": "api.py:5929 (batch-split-invoices archive extraction)",
+      "description": "ZIP extraction path traversal (CWE-409) in batch split-invoices endpoint. zipfile.ZipFile.extractall() was called without validating member paths. A malicious ZIP with entries like '../../../etc/passwd' could write files outside the extraction directory.",
+      "fix_suggestion": "Validate all ZIP member paths resolve within the extraction directory before extracting.",
+      "status": "FIXED",
+      "audit_round": 4
+    },
+    {
+      "id": "VULN-033",
+      "severity": "Critical",
+      "location": "api.py:6924 (archive-processor extraction)",
+      "description": "ZIP extraction path traversal (CWE-409) in archive processor endpoint. Same vulnerability as VULN-032 in the /api/batch/archive-processor endpoint.",
+      "fix_suggestion": "Validate all ZIP member paths resolve within the extraction directory before extracting.",
+      "status": "FIXED",
+      "audit_round": 4
+    },
+    {
+      "id": "VULN-034",
+      "severity": "High",
+      "location": "api.py:7024 (batch-document-splitter)",
+      "description": "Unsanitized file.filename used in temp file path construction. An uploaded file with name '../../etc/passwd' could write outside OUTPUT_DIR despite the uuid prefix.",
+      "fix_suggestion": "Use sanitize_filename(Path(file.filename).name) to strip path components.",
+      "status": "FIXED",
+      "audit_round": 4
+    },
+    {
+      "id": "VULN-035",
+      "severity": "High",
+      "location": "api.py:7168 (batch-invoice-extractor)",
+      "description": "Same unsanitized file.filename vulnerability as VULN-034 in batch invoice extraction endpoint.",
+      "fix_suggestion": "Use sanitize_filename(Path(file.filename).name) to strip path components.",
+      "status": "FIXED",
+      "audit_round": 4
+    },
+    {
+      "id": "VULN-036",
+      "severity": "High",
+      "location": "api.py:7290 (batch-receipt-extractor)",
+      "description": "Same unsanitized file.filename vulnerability as VULN-034 in batch receipt extraction endpoint.",
+      "fix_suggestion": "Use sanitize_filename(Path(file.filename).name) to strip path components.",
+      "status": "FIXED",
+      "audit_round": 4
+    }
+  ]
+}

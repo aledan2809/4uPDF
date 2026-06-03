@@ -18,6 +18,7 @@ import io
 import shutil
 import atexit
 import hashlib
+import logging
 import sqlite3
 import secrets
 from pathlib import Path
@@ -61,6 +62,8 @@ for _fp in [
         UNICODE_FONT_PATH = _fp
         break
 
+logger = logging.getLogger("4updf")
+
 app = FastAPI(title="4uPDF API")
 
 allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3098,https://4updf.com").split(",")
@@ -68,7 +71,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
     allow_credentials=True,
     max_age=3600
 )
@@ -459,6 +462,8 @@ def get_current_user_required(credentials: HTTPAuthorizationCredentials = Depend
     user = get_current_user(credentials)
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
+    if user.get("is_banned"):
+        raise HTTPException(status_code=403, detail="Account is suspended")
     return user
 
 def generate_composite_hash(ip: str, fingerprint: str = "", local_token: str = "") -> str:
@@ -1409,7 +1414,8 @@ async def create_checkout_session(
         return {"checkout_url": session.url, "session_id": session.id}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 @app.post("/api/stripe/webhook")
@@ -1502,7 +1508,8 @@ async def create_customer_portal(user: Dict[str, Any] = Depends(get_current_user
         )
         return {"portal_url": session.url}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
 # ============================================================================
@@ -2493,10 +2500,17 @@ def list_jobs():
 @app.get("/api/download/{filename}")
 def download_file(filename: str, output_dir: str = "output"):
     """Download a split PDF file."""
-    path = os.path.join(output_dir, filename)
-    if not os.path.exists(path):
+    # Prevent path traversal: only allow simple filenames
+    safe_filename = Path(filename).name
+    if safe_filename != filename or ".." in filename:
+        return JSONResponse({"error": "Invalid filename"}, status_code=400)
+    base_dir = Path(output_dir).resolve()
+    path = (base_dir / safe_filename).resolve()
+    if not str(path).startswith(str(base_dir)):
+        return JSONResponse({"error": "Invalid filename"}, status_code=400)
+    if not path.exists():
         return JSONResponse({"error": "File not found"}, status_code=404)
-    return FileResponse(path, filename=filename, media_type="application/pdf")
+    return FileResponse(str(path), filename=safe_filename, media_type="application/pdf")
 
 
 @app.get("/api/browse")
@@ -2504,6 +2518,10 @@ def browse_folder(path: str = "."):
     """Browse filesystem for input/output folder selection."""
     try:
         p = Path(path).resolve()
+        # Restrict browsing to the application directory tree
+        app_root = Path(__file__).parent.resolve()
+        if not str(p).startswith(str(app_root)):
+            return JSONResponse({"error": "Access denied: path outside application directory"}, status_code=403)
         if not p.exists():
             return JSONResponse({"error": "Path not found"}, status_code=404)
 
@@ -2523,13 +2541,17 @@ def browse_folder(path: str = "."):
 
         return {"current": str(p), "items": items}
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.exception("Browse error")
+        return JSONResponse({"error": "Failed to browse directory"}, status_code=500)
 
 
 @app.get("/api/download-all")
 def download_all(output_dir: str = "output"):
     """Download all split PDFs as a ZIP file."""
-    p = Path(output_dir)
+    p = Path(output_dir).resolve()
+    app_root = Path(__file__).parent.resolve()
+    if not str(p).startswith(str(app_root)):
+        return JSONResponse({"error": "Access denied: path outside application directory"}, status_code=403)
     if not p.exists():
         return JSONResponse({"error": "Output directory not found"}, status_code=404)
 
@@ -2569,7 +2591,7 @@ def get_defaults():
 # ============================================================================
 
 def cleanup_old_files():
-    """Delete files older than FILE_EXPIRY_SECONDS."""
+    """Delete files older than FILE_EXPIRY_SECONDS and evict stale jobs."""
     now = time.time()
     for directory in [UPLOAD_DIR, OUTPUT_DIR]:
         if not directory.exists():
@@ -2582,6 +2604,16 @@ def cleanup_old_files():
                         file_path.unlink()
                     except Exception:
                         pass
+
+    # Evict completed/errored jobs older than 24 hours to prevent memory bloat
+    for job_dict in [jobs, batch_jobs, batch_processing_jobs]:
+        stale_ids = [
+            jid for jid, j in job_dict.items()
+            if j.get("status") in ("done", "error")
+            and now - j.get("started_at", now) > FILE_EXPIRY_SECONDS
+        ]
+        for jid in stale_ids:
+            job_dict.pop(jid, None)
 
 
 def start_cleanup_thread():
@@ -2608,13 +2640,22 @@ async def startup_event():
 # Helper Functions
 # ============================================================================
 
+MAX_UPLOAD_SIZE = 500 * 1024 * 1024  # 500 MB hard limit
+
 def save_upload_file(file: UploadFile) -> Path:
-    """Save uploaded file with unique name."""
-    ext = Path(file.filename).suffix
+    """Save uploaded file with unique name and size validation."""
+    ext = Path(file.filename).suffix if file.filename else ""
     unique_name = f"{uuid.uuid4().hex}{ext}"
     file_path = UPLOAD_DIR / unique_name
+    total_size = 0
     with open(file_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+        while chunk := file.file.read(1024 * 1024):
+            total_size += len(chunk)
+            if total_size > MAX_UPLOAD_SIZE:
+                f.close()
+                file_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail=f"File too large. Maximum {MAX_UPLOAD_SIZE // (1024*1024)}MB")
+            f.write(chunk)
     return file_path
 
 
@@ -2645,8 +2686,11 @@ async def merge_pdfs(files: List[UploadFile] = File(...), order: str = Form(None
 
         # Parse order if provided
         if order:
-            indices = [int(i) for i in order.split(",")]
-            saved_files = [saved_files[i] for i in indices if i < len(saved_files)]
+            try:
+                indices = [int(i) for i in order.split(",")]
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid order format: must be comma-separated integers")
+            saved_files = [saved_files[i] for i in indices if 0 <= i < len(saved_files)]
 
         # Merge PDFs
         output_path = create_output_path("merged")
@@ -2681,12 +2725,13 @@ async def merge_pdfs(files: List[UploadFile] = File(...), order: str = Form(None
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         for f in saved_files:
             try:
                 f.unlink()
-            except:
+            except Exception:
                 pass
 
 
@@ -2723,7 +2768,12 @@ async def split_pdf_pages(
 
         elif split_mode == "every":
             # Split every N pages
-            n = int(ranges)
+            try:
+                n = int(ranges)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid value for page count: must be a positive integer")
+            if n <= 0:
+                raise HTTPException(status_code=400, detail="Page count must be a positive integer")
             for start in range(0, total_pages, n):
                 end = min(start + n - 1, total_pages - 1)
                 out_path = create_output_path(f"pages_{start+1}-{end+1}")
@@ -2737,14 +2787,26 @@ async def split_pdf_pages(
         else:
             # Parse ranges like "1-3,5,7-10"
             page_sets = []
-            for part in ranges.split(","):
-                part = part.strip()
-                if "-" in part:
-                    start, end = map(int, part.split("-"))
-                    page_sets.append((start - 1, end - 1))
-                else:
-                    p = int(part) - 1
-                    page_sets.append((p, p))
+            try:
+                for part in ranges.split(","):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    if "-" in part:
+                        parts = part.split("-")
+                        if len(parts) != 2:
+                            raise ValueError(f"Invalid range format: {part}")
+                        start, end = int(parts[0]), int(parts[1])
+                        if start > end:
+                            raise ValueError(f"Invalid range: start ({start}) > end ({end})")
+                        page_sets.append((start - 1, end - 1))
+                    else:
+                        p = int(part) - 1
+                        page_sets.append((p, p))
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid page range: {e}")
+            if not page_sets:
+                raise HTTPException(status_code=400, detail="No valid page ranges provided")
 
             for idx, (start, end) in enumerate(page_sets):
                 start = max(0, min(start, total_pages - 1))
@@ -2771,11 +2833,12 @@ async def split_pdf_pages(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -2830,7 +2893,7 @@ async def compress_pdf(
                             # Note: Full image replacement requires more complex logic
                         except ImportError:
                             pass
-                except:
+                except Exception:
                     pass
             jobs[job_id]["progress"] = int((i + 1) / total_pages * 50)
 
@@ -2860,11 +2923,12 @@ async def compress_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -2943,11 +3007,12 @@ async def pdf_to_jpg(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -2973,8 +3038,11 @@ async def jpg_to_pdf(
 
         # Parse order if provided
         if order:
-            indices = [int(i) for i in order.split(",")]
-            saved_files = [saved_files[i] for i in indices if i < len(saved_files)]
+            try:
+                indices = [int(i) for i in order.split(",")]
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid order format: must be comma-separated integers")
+            saved_files = [saved_files[i] for i in indices if 0 <= i < len(saved_files)]
 
         # Page size settings (in points)
         page_sizes = {
@@ -3025,12 +3093,13 @@ async def jpg_to_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         for f in saved_files:
             try:
                 f.unlink()
-            except:
+            except Exception:
                 pass
 
 
@@ -3106,11 +3175,12 @@ async def pdf_to_word(file: UploadFile = File(...)):
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -3193,11 +3263,12 @@ async def word_to_pdf(file: UploadFile = File(...)):
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -3286,7 +3357,7 @@ async def pdf_to_excel(file: UploadFile = File(...)):
                 try:
                     if cell.value:
                         max_length = max(max_length, len(str(cell.value)))
-                except:
+                except Exception:
                     pass
             ws.column_dimensions[column].width = min(max_length + 2, 50)
 
@@ -3310,11 +3381,12 @@ async def pdf_to_excel(file: UploadFile = File(...)):
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -3387,11 +3459,12 @@ async def excel_to_pdf(file: UploadFile = File(...)):
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -3440,7 +3513,7 @@ async def pdf_to_powerpoint(file: UploadFile = File(...)):
             # Clean up temp image
             try:
                 img_path.unlink()
-            except:
+            except Exception:
                 pass
 
             jobs[job_id]["progress"] = int((i + 1) / total_pages * 100)
@@ -3464,11 +3537,12 @@ async def pdf_to_powerpoint(file: UploadFile = File(...)):
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -3518,7 +3592,7 @@ async def powerpoint_to_pdf(file: UploadFile = File(...)):
                     if bg.type is not None and hasattr(bg, 'fore_color') and bg.fore_color:
                         rgb = bg.fore_color.rgb
                         draw.rectangle([0, 0, img_width, img_height], fill=f"#{rgb}")
-                except:
+                except Exception:
                     pass
 
             # Render shapes with positions
@@ -3540,7 +3614,7 @@ async def powerpoint_to_pdf(file: UploadFile = File(...)):
                         shape_img = shape_img.convert("RGBA")
                         shape_img = shape_img.resize((max(w, 1), max(h, 1)), PILImage.LANCZOS)
                         img.paste(shape_img, (x, y), shape_img if shape_img.mode == "RGBA" else None)
-                    except:
+                    except Exception:
                         pass
 
                 # Handle text
@@ -3569,12 +3643,12 @@ async def powerpoint_to_pdf(file: UploadFile = File(...)):
                             scaled_fs = max(int(fs * img_width / 1920 * 1.5), 10)
                             try:
                                 font = ImageFont.truetype(font_path, scaled_fs)
-                            except:
+                            except Exception:
                                 font = ImageFont.load_default()
 
                             draw.text((x + 5, text_y), para.text, fill=font_color, font=font)
                             text_y += scaled_fs + 4
-                    except:
+                    except Exception:
                         pass
 
                 # Handle tables
@@ -3593,10 +3667,10 @@ async def powerpoint_to_pdf(file: UploadFile = File(...)):
                                 draw.rectangle([cx, cy, cx + cell_w, cy + cell_h], outline=(180, 180, 180))
                                 try:
                                     font = ImageFont.truetype(font_path, max(int(12 * img_width / 1920 * 1.5), 8))
-                                except:
+                                except Exception:
                                     font = ImageFont.load_default()
                                 draw.text((cx + 3, cy + 3), cell.text[:50], fill=(0, 0, 0), font=font)
-                    except:
+                    except Exception:
                         pass
 
             # Convert PIL image to PDF page
@@ -3622,16 +3696,17 @@ async def powerpoint_to_pdf(file: UploadFile = File(...)):
             "filename": output_path.name,
             "pages": total_slides
         }
-    except ImportError as e:
-        raise HTTPException(status_code=500, detail=f"python-pptx and Pillow are required: {e}")
+    except ImportError:
+        raise HTTPException(status_code=500, detail="python-pptx and Pillow are required for PowerPoint conversion")
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -3704,12 +3779,13 @@ async def png_to_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         for f in saved_files:
             try:
                 f.unlink()
-            except:
+            except Exception:
                 pass
 
 
@@ -3785,11 +3861,12 @@ async def pdf_to_png(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -3833,11 +3910,12 @@ async def pdf_to_text(file: UploadFile = File(...)):
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -3944,12 +4022,13 @@ async def text_to_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         if saved_file:
             try:
                 saved_file.unlink()
-            except:
+            except Exception:
                 pass
 
 
@@ -4003,12 +4082,13 @@ async def html_to_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         if saved_file:
             try:
                 saved_file.unlink()
-            except:
+            except Exception:
                 pass
 
 
@@ -4040,11 +4120,21 @@ def get_job_status(job_id: str):
 @app.get("/api/download/{filename}")
 def download_output(filename: str):
     """Download processed file from output directory."""
-    file_path = OUTPUT_DIR / filename
+    # Prevent path traversal: only allow simple filenames
+    safe_filename = Path(filename).name
+    if safe_filename != filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    file_path = (OUTPUT_DIR / safe_filename).resolve()
+    base_dir = OUTPUT_DIR.resolve()
+    if not str(file_path).startswith(str(base_dir)):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
     if not file_path.exists():
         # Also check in the old output directory
-        old_path = Path("output") / filename
-        if old_path.exists():
+        old_base = Path("output").resolve()
+        old_path = (old_base / safe_filename).resolve()
+        if str(old_path).startswith(str(old_base)) and old_path.exists():
             file_path = old_path
         else:
             raise HTTPException(status_code=404, detail="File not found")
@@ -4054,15 +4144,19 @@ def download_output(filename: str):
     media_types = {
         ".pdf": "application/pdf",
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".txt": "text/plain",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".png": "image/png",
-        ".zip": "application/zip"
+        ".zip": "application/zip",
+        ".json": "application/json",
+        ".csv": "text/csv",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
     }
     media_type = media_types.get(suffix, "application/octet-stream")
 
-    return FileResponse(str(file_path), filename=filename, media_type=media_type)
+    return FileResponse(str(file_path), filename=safe_filename, media_type=media_type)
 
 
 # ============================================================================
@@ -4119,11 +4213,12 @@ async def rotate_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -4183,11 +4278,12 @@ async def delete_pages(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -4248,11 +4344,12 @@ async def extract_pages(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -4320,11 +4417,12 @@ async def crop_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -4447,16 +4545,17 @@ async def watermark_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
         if watermark_file:
             try:
                 watermark_file.unlink()
-            except:
+            except Exception:
                 pass
 
 
@@ -4526,11 +4625,12 @@ async def add_page_numbers(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -4593,11 +4693,12 @@ async def protect_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -4641,11 +4742,12 @@ async def unlock_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -4728,11 +4830,12 @@ async def edit_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -4810,11 +4913,12 @@ async def annotate_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -4881,11 +4985,12 @@ async def redact_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -4952,11 +5057,12 @@ async def organize_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -4977,9 +5083,14 @@ async def flatten_pdf(file: UploadFile = File(...)):
 
         for i, page in enumerate(doc):
             page.clean_contents()
+            # Render each annotation into the page content then remove it
             annots = list(page.annots()) if page.annots() else []
             for annot in annots:
-                annot.set_flags(fitz.PDF_ANNOT_IS_HIDDEN)
+                # Add redaction annotation over each annotation to burn it into the page
+                annot_rect = annot.rect
+                page.add_redact_annot(annot_rect)
+            if annots:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
             jobs[job_id]["progress"] = int((i + 1) / total_pages * 50)
 
         output_path = create_output_path("flattened")
@@ -5001,11 +5112,12 @@ async def flatten_pdf(file: UploadFile = File(...)):
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -5052,11 +5164,12 @@ async def repair_pdf(file: UploadFile = File(...)):
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -5158,11 +5271,12 @@ async def split_by_text(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -5272,11 +5386,12 @@ async def split_invoices(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -5366,11 +5481,12 @@ async def auto_rename_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -5482,11 +5598,12 @@ async def detect_document_type(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -5569,11 +5686,12 @@ async def add_ocr_layer(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -5666,11 +5784,12 @@ async def extract_text_ocr(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
@@ -5774,20 +5893,18 @@ async def sign_pdf(
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=f"Signature failed: {str(e)}")
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
 
 
 # ============================================================================
 # Batch Processing Configuration
 # ============================================================================
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import tempfile
 
 # Configurable worker pool for batch operations
 BATCH_WORKERS = int(os.environ.get("BATCH_WORKERS", 4))
@@ -5881,13 +5998,14 @@ def process_single_pdf_for_archive(pdf_path: Path, ocr, dpi: int = 150) -> Dict[
         doc_type = detect_document_type(full_text)
         identifier = extract_document_identifier(full_text, doc_type)
 
+        page_count = doc.page_count
         doc.close()
 
         return {
             "path": pdf_path,
             "type": doc_type,
             "identifier": identifier,
-            "pages": doc.page_count if hasattr(doc, 'page_count') else 1,
+            "pages": page_count,
             "size": pdf_path.stat().st_size,
             "success": True
         }
@@ -5935,6 +6053,11 @@ async def process_archive(
         extract_dir.mkdir()
 
         with zipfile.ZipFile(str(saved_file), 'r') as zf:
+            # Validate ZIP entries against path traversal (CWE-409)
+            for member in zf.namelist():
+                member_path = (extract_dir / member).resolve()
+                if not str(member_path).startswith(str(extract_dir.resolve())):
+                    raise HTTPException(status_code=400, detail="Invalid archive: path traversal detected")
             zf.extractall(str(extract_dir))
 
         # Find all PDFs
@@ -6038,16 +6161,17 @@ async def process_archive(
     except Exception as e:
         batch_jobs[job_id]["status"] = "error"
         batch_jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         try:
             saved_file.unlink()
-        except:
+        except Exception:
             pass
         if temp_dir and temp_dir.exists():
             try:
                 shutil.rmtree(str(temp_dir))
-            except:
+            except Exception:
                 pass
 
 
@@ -6210,12 +6334,13 @@ async def batch_document_splitter(
     except Exception as e:
         batch_jobs[job_id]["status"] = "error"
         batch_jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         for f in saved_files:
             try:
                 f.unlink()
-            except:
+            except Exception:
                 pass
 
 
@@ -6264,9 +6389,10 @@ def extract_invoice_data(pdf_path: Path, ocr, dpi: int = 150) -> Dict[str, Any]:
             texts = [r[1] for r in result] if result else []
             all_text += ' '.join(texts) + "\n"
 
+        page_count = doc.page_count
         doc.close()
 
-        extracted = {"source_file": pdf_path.name, "pages": doc.page_count if hasattr(doc, 'page_count') else 1}
+        extracted = {"source_file": pdf_path.name, "pages": page_count}
 
         for field, patterns in INVOICE_FIELD_PATTERNS.items():
             for pattern in patterns:
@@ -6398,12 +6524,13 @@ async def extract_invoices(
     except Exception as e:
         batch_jobs[job_id]["status"] = "error"
         batch_jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         for f in saved_files:
             try:
                 f.unlink()
-            except:
+            except Exception:
                 pass
 
 
@@ -6582,12 +6709,13 @@ async def extract_receipts(
     except Exception as e:
         batch_jobs[job_id]["status"] = "error"
         batch_jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         for f in saved_files:
             try:
                 f.unlink()
-            except:
+            except Exception:
                 pass
 
 
@@ -6706,12 +6834,13 @@ async def batch_process_multiple(
     except Exception as e:
         batch_jobs[job_id]["status"] = "error"
         batch_jobs[job_id]["error"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Processing error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
     finally:
         for pdf_path, _ in saved_files:
             try:
                 pdf_path.unlink()
-            except:
+            except Exception:
                 pass
 
 
@@ -6924,6 +7053,14 @@ async def archive_processor_upload(
             zip_buffer = io.BytesIO(content)
 
             with zipfile.ZipFile(zip_buffer, 'r') as zip_ref:
+                # Validate ZIP entries against path traversal (CWE-409)
+                temp_dir_resolved = str(Path(temp_dir).resolve())
+                for member in zip_ref.namelist():
+                    member_path = (Path(temp_dir) / member).resolve()
+                    if not str(member_path).startswith(temp_dir_resolved):
+                        batch_processing_jobs[job_id]["status"] = "error"
+                        batch_processing_jobs[job_id]["error"] = "Invalid archive: path traversal detected"
+                        return
                 zip_ref.extractall(temp_dir)
 
             pdf_files = []
@@ -7024,9 +7161,10 @@ async def batch_document_splitter_upload(
     saved_files = []
     for file in files:
         content = await file.read()
-        temp_path = OUTPUT_DIR / f"temp_{uuid.uuid4().hex[:8]}_{file.filename}"
+        safe_name = sanitize_filename(Path(file.filename).name) if file.filename else "upload.pdf"
+        temp_path = OUTPUT_DIR / f"temp_{uuid.uuid4().hex[:8]}_{safe_name}"
         temp_path.write_bytes(content)
-        saved_files.append((temp_path, file.filename))
+        saved_files.append((temp_path, file.filename or safe_name))
 
     def process_batch_split():
         try:
@@ -7168,9 +7306,10 @@ async def invoice_extractor_upload(
     saved_files = []
     for file in files:
         content = await file.read()
-        temp_path = OUTPUT_DIR / f"temp_{uuid.uuid4().hex[:8]}_{file.filename}"
+        safe_name = sanitize_filename(Path(file.filename).name) if file.filename else "upload.pdf"
+        temp_path = OUTPUT_DIR / f"temp_{uuid.uuid4().hex[:8]}_{safe_name}"
         temp_path.write_bytes(content)
-        saved_files.append((temp_path, file.filename))
+        saved_files.append((temp_path, file.filename or safe_name))
 
     def process_invoice_extraction():
         try:
@@ -7290,9 +7429,10 @@ async def receipt_extractor_upload(
     saved_files = []
     for file in files:
         content = await file.read()
-        temp_path = OUTPUT_DIR / f"temp_{uuid.uuid4().hex[:8]}_{file.filename}"
+        safe_name = sanitize_filename(Path(file.filename).name) if file.filename else "upload.pdf"
+        temp_path = OUTPUT_DIR / f"temp_{uuid.uuid4().hex[:8]}_{safe_name}"
         temp_path.write_bytes(content)
-        saved_files.append((temp_path, file.filename))
+        saved_files.append((temp_path, file.filename or safe_name))
 
     def process_receipt_extraction():
         try:

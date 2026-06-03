@@ -1,0 +1,8 @@
+# Default LF normalization for text — prevents CRLF/LF pollution per L43
+* text=auto eol=lf
+
+# Binary tarballs (vendored shared-lib snapshots per L50 tarball pattern)
+*.tgz binary
+
+# Build artefacts treated as binary so diff-noise stays out of PRs
+*.tsbuildinfo binary

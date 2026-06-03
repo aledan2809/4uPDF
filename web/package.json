@@ -28,6 +28,7 @@
     "@types/mdx": "^2.0.13",
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
+    "ai-router": "file:vendor/ai-router-1.0.0.tgz",
     "gray-matter": "^4.0.3",
     "next": "^16.1.6",
     "next-mdx-remote": "^6.0.0",

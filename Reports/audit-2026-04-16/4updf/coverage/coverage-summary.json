@@ -1,0 +1,69 @@
+{
+  "audit_date": "2026-04-16",
+  "re_audit_date": "2026-04-18",
+  "coverage_method": "static_analysis",
+  "note": "Coverage measured via AST-based static analysis of modified code sections. No runtime coverage tool (pytest-cov) was used as the existing test suite requires a running server with test files.",
+  "modified_modules": {
+    "api.py": {
+      "total_lines": 7420,
+      "lines_modified_r1": 110,
+      "lines_modified_r2": 25,
+      "lines_modified_r3": 20,
+      "total_fixes_applied": 20,
+      "total_fixes_verified": 20,
+      "verification_coverage": "100%"
+    },
+    "routes.py": {
+      "total_lines": 1500,
+      "lines_modified_r3": 25,
+      "total_fixes_applied": 3,
+      "total_fixes_verified": 3,
+      "verification_coverage": "100%"
+    }
+  },
+  "round_3_fix_verification": {
+    "VULN-015_routes_error_exposure": {
+      "fix_present": true,
+      "verified_by": "Regex search confirms 0 instances of str(e) in routes.py error handlers"
+    },
+    "VULN-016_save_upload_file_size": {
+      "fix_present": true,
+      "verified_by": "AST parse confirms streaming write with MAX_UPLOAD_SIZE check"
+    },
+    "VULN-024_detect_type_resource_leak": {
+      "fix_present": true,
+      "verified_by": "AST parse confirms fitz.open stored in variable with .close() call"
+    },
+    "VULN-025_flatten_annotations": {
+      "fix_present": true,
+      "verified_by": "AST parse confirms apply_redactions() used instead of IS_HIDDEN flag"
+    },
+    "VULN-026_pptx_import_error_leak": {
+      "fix_present": true,
+      "verified_by": "String search confirms static error message without exception variable"
+    }
+  },
+  "all_rounds_fix_verification": {
+    "VULN-001_path_traversal_download": { "fix_present": true, "round": 1 },
+    "VULN-002_path_traversal_browse": { "fix_present": true, "round": 1 },
+    "VULN-003_path_traversal_download_all": { "fix_present": true, "round": 1 },
+    "VULN-004_input_validation_split": { "fix_present": true, "round": 1 },
+    "VULN-005_path_traversal_download2": { "fix_present": true, "round": 2 },
+    "VULN-006_negative_index": { "fix_present": true, "round": 1 },
+    "VULN-007_bare_except": { "fix_present": true, "round": 1 },
+    "VULN-008_error_messages_api": { "fix_present": true, "round": 1 },
+    "VULN-009_cors_headers": { "fix_present": true, "round": 1 },
+    "VULN-011_filename_injection": { "fix_present": true, "round": 1 },
+    "VULN-012_page_count_after_close": { "fix_present": true, "round": 2 },
+    "VULN-013_sign_pdf_error_leak": { "fix_present": true, "round": 2 },
+    "VULN-014_banned_user_enforcement": { "fix_present": true, "round": 2 },
+    "VULN-015_routes_error_exposure": { "fix_present": true, "round": 3 },
+    "VULN-016_save_upload_size_validation": { "fix_present": true, "round": 3 },
+    "VULN-023_job_dict_eviction": { "fix_present": true, "round": 2 },
+    "VULN-024_detect_type_resource_leak": { "fix_present": true, "round": 3 },
+    "VULN-025_flatten_annotations": { "fix_present": true, "round": 3 },
+    "VULN-026_pptx_import_error_leak": { "fix_present": true, "round": 3 },
+    "VULN-027_duplicate_imports": { "fix_present": true, "round": 2 }
+  },
+  "ocr_split_no_touch_verified": true
+}
