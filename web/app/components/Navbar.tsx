@@ -24,6 +24,7 @@ const toolCategories = [
       { name: "PDF to Excel", href: "/tools/pdf-to-excel" },
       { name: "PDF to PowerPoint", href: "/tools/pdf-to-powerpoint" },
       { name: "PDF to JPG", href: "/tools/pdf-to-jpg" },
+      { name: "Extract Figure", href: "/tools/extract-figure" },
       { name: "Word to PDF", href: "/tools/word-to-pdf" },
       { name: "Excel to PDF", href: "/tools/excel-to-pdf" },
       { name: "JPG to PDF", href: "/tools/jpg-to-pdf" },

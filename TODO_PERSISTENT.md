@@ -28,6 +28,47 @@
 
 ---
 
+## [~] ✂️ Extract Figure / Snip from PDF — region-crop tool (Basic client-side LIVE; Advanced server-side pending)
+
+**Origine (2026-06-03)**: Tutor avea nevoie de decuparea unor *desene/figuri* din PDF. Concluzia (corectă) a sesiunii Tutor: pentru flux **programatic headless** cu coordonate știute, `fitz.get_pixmap(clip=Rect)` local e mai curat — 4uPDF n-aduce plus ACOLO. **Dar** 4uPDF e produs diferit: unealtă **interactivă pentru om** (desenezi un dreptunghi pe pagină → primești zona ca imagine). Același motor (PyMuPDF/fitz), consumator diferit.
+
+**Gap de piață (verificat)**: "extract images from PDF" (poze raster înglobate) = comoditate gratis peste tot (PDF24/Smallpdf/PDFCandy/Sejda) — DAR nu prinde **desene vectoriale**. "Snip o regiune oarecare → imagine high-DPI" (inclusiv vectorial) = rar; majoritatea o fac prin screenshot lossy. `fitz.get_pixmap(clip=Rect, matrix=zoom)` randează orice (vector+text+raster) la 300/600 DPI = net mai bun. Nișa noastră.
+
+**Ce există deja în 4uPDF** (NU reinventa): `crop_pdf` ([api.py:4457](api.py)) taie **marginile** paginii uniform → PDF (stil iLovePDF, NU decupare figură); `pdf-to-jpg/png` randează **pagini întregi**; `get_images`/`extract_image` ([api.py:2972](api.py)) doar intern la compress. Niciunul nu face "snip regiune → imagine".
+
+### Arhitectura Basic vs Advanced (split pe valoare ȘI cost)
+
+| | **Basic (free)** | **Advanced (paid)** |
+|---|---|---|
+| Unde rulează | **client-side** (pdf.js, zero upload) | **server-side** (fitz) |
+| Rezoluție | ecran ~96-150 DPI | **300/600/1200 DPI** crisp |
+| Cost infra | ~zero | compute real → justifică prețul |
+| Privacy | "nu iese din browser" (vânzare + scapi GDPR upload) | upload + ștergere rapidă |
+| Extra | 1 regiune, PNG | **batch** (aceeași zonă pe N pagini / toate figurile), OCR caption, fundal transparent/auto-trim, multi-format, SVG vectorial |
+
+### Basic — IN PROGRESS (se construiește în sesiunea 2026-06-03; flip la DONE după deploy)
+- Pagină `/tools/extract-figure` — client-side complet: upload PDF → pdf.js randează pagina pe canvas → user trage un dreptunghi → exportă regiunea ca PNG. Multi-page nav. **Fără login, fără upload** (commodity free + SEO + funnel).
+- pdf.js worker self-hosted (`/public/pdf.worker.min.mjs` copiat la build via `prebuild`, version-matched — fără CDN, CSP-friendly).
+
+### Advanced — PENDING (server-side, paid)
+1. **Endpoint** `POST /api/extract-region` în `api.py` (NU split-ocr): `{file, page, rect:[x0,y0,x1,y1] în coord pagină, dpi}` → `fitz.get_pixmap(clip=Rect, matrix=zoom(dpi))` → PNG high-DPI. Gate pe `PlanLimits.smart_tools` sau tier paid.
+2. **Batch**: aceeași regiune pe range de pagini / auto-extract toate figurile (`get_images` + heuristică bounding-box pe desene vectoriale).
+3. **OCR caption**: rulează OCR pe regiunea decupată (reuse motorul OCR existent) → text + imagine.
+4. **Extra**: fundal transparent, auto-trim margini albe, multi-format (PNG/TIFF), export SVG pt. vectorial.
+5. **UI**: pe aceeași pagină, opțiunile high-DPI/batch/OCR apar ca "Advanced" cu zid de upgrade (`shouldShowAds`/tier check) — conversie la momentul valorii.
+6. **Gating**: refolosește `PlanLimits` (`smart_tools`/`batch_processing`/`max_file_size_mb`) + Stripe tiers existente — fără billing nou.
+
+### Best practices monetizare (regulile de aur, aplicate)
+- NU paywall pe comoditate (merge/split/compress/convert/extract-images) — SEO + funnel. Monetizezi **adâncimea** (DPI, batch, OCR, AI), nu accesul.
+- Tier pe metrici aliniate valoare+cost: DPI, batch, file size, pages/zi, apeluri AI/OCR, API.
+- Versiune free din fiecare unealtă premium, cu zid natural la momentul valorii.
+- Privacy = feature (client-side "nu se urcă nimic").
+- Pachet "Pro" = AI Assistant + Figure-Snip Advanced + OCR + batch.
+
+**Granițe**: separat complet de `split-ocr` (NO-TOUCH). Advanced va atinge `api.py` (ACTIVE, dar NU handler-ul split-ocr) — propose-confirm dacă e nevoie.
+
+---
+
 ## [x] 🔧 nginx /api migration — deploy Next /api routes (AI + newsletter) — DONE 2026-06-03 (LIVE, commit `8b281f3`)
 
 **Context**: deferat din item C (handoff Master). Cele 3 rute Next NEdeployate (`/api/ai`, `/api/newsletter`, `[...path]` catch-all) erau pe `unify-2026-06`; comitul `f0003d3 deploy-safe` le scosese intenționat ca să livreze CAS fără schimbare nginx.

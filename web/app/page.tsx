@@ -65,6 +65,7 @@ const allTools = [
   { name: "PDF to PowerPoint", href: "/tools/pdf-to-powerpoint", category: "convert" },
   { name: "PDF to JPG", href: "/tools/pdf-to-jpg", category: "convert" },
   { name: "PDF to PNG", href: "/tools/pdf-to-png", category: "convert" },
+  { name: "Extract Figure", href: "/tools/extract-figure", category: "convert" },
   { name: "PDF to Text", href: "/tools/pdf-to-text", category: "convert" },
   // Convert to PDF
   { name: "Word to PDF", href: "/tools/word-to-pdf", category: "convert" },
