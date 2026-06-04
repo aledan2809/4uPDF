@@ -36,6 +36,24 @@
 
 **Ce există deja în 4uPDF** (NU reinventa): `crop_pdf` ([api.py:4457](api.py)) taie **marginile** paginii uniform → PDF (stil iLovePDF, NU decupare figură); `pdf-to-jpg/png` randează **pagini întregi**; `get_images`/`extract_image` ([api.py:2972](api.py)) doar intern la compress. Niciunul nu face "snip regiune → imagine".
 
+### ⚠️ PROBLEMĂ DE REZOLVAT (2026-06-03) — copy-ul promite features Pro inexistente
+
+**Descoperit** când o sesiune Tutor a încercat să folosească "extract-figure" programatic: a verificat exhaustiv `api.py`+`routes.py` și a refuzat (corect) să creeze cont + să plătească Pro, fiindcă **premisa nu se confirmă în cod**:
+- Tool-ul `extract-figure` = 100% client-side (canvas/pdf.js). **Zero backend.**
+- Singurul endpoint "crop" = `/api/crop` ([api.py:4456](api.py)) taie marginile paginii → PDF, **NU** extrage o figură ca imagine.
+- Copy-ul de pe pagină spune textual: *"High-DPI export (300/600/1200 DPI), batch extraction ... are planned for the Advanced (Pro) version."* → un upgrade Pro **NU deblochează nimic** pentru figuri; feature-ul e doar *planned*.
+
+**De ce e problemă**: e un gap de onestitate/încredere live pe prod (borderline reclamă pentru ceva ce nu există). Un user care plătește Pro pentru high-DPI figuri rămâne fără. Onest reporting cere fix.
+
+**Două căi de rezolvare**:
+1. **Imediat (mic, onest)**: înmoaie copy-ul de pe `/tools/extract-figure` — scoate referința la "Pro/Advanced" până când backend-ul există (ex: "Screen-resolution export. Higher-DPI export coming soon." fără să implice că Pro-ul actual o deblochează). **Recomandat ACUM.**
+2. **Real (efort)**: construiește backend-ul Advanced (vezi secțiunea de mai jos) → atunci copy-ul devine adevărat + ai ce vinde la Pro.
+
+**Merită backend/API? (verdict onest)**:
+- **DA pentru web Advanced tier** — high-DPI/batch/OCR sunt payoff-ul de monetizare + reutilizezi motorul fitz pe care 4uPDF deja îl rulează (efort marginal mic pe endpoint-ul de bază). Asta repară și gap-ul de onestitate.
+- **API public (programmatic)** = util DOAR ca produs `api_access` Pro tier (vinzi acces API la consumeri externi fără motor PDF). **NU** se justifică prin Tutor: Tutor are PyMuPDF/fitz local → `get_pixmap(clip=Rect)` local e mai curat decât round-trip HTTP la 4uPDF. NU construi API-ul "pentru Tutor".
+- **Concluzie**: fix copy ACUM (cale 1) + programează backend-ul Advanced ca payoff de monetizare (cale 2), justificat de web-tier + api_access, NU de Tutor.
+
 ### Arhitectura Basic vs Advanced (split pe valoare ȘI cost)
 
 | | **Basic (free)** | **Advanced (paid)** |
@@ -66,6 +84,13 @@
 - Versiune free din fiecare unealtă premium, cu zid natural la momentul valorii.
 - Privacy = feature (client-side "nu se urcă nimic").
 - Pachet "Pro" = AI Assistant + Figure-Snip Advanced + OCR + batch.
+
+### 💵 Monetizare — DA, două lane-uri (răspuns la "poate fi monetizare?")
+Backend-ul Advanced nu e doar fix de onestitate, e **venit**, pe două suprafețe distincte:
+1. **B2C — web Pro tier**: high-DPI (300/600/1200) + batch + OCR figuri, gated pe plan plătit. Refolosește `PlanLimits.smart_tools` + Stripe existente. Userul plătește pentru *adâncime*.
+2. **B2B — API access tier** (`PlanLimits.api_access`, flag deja existent dar nesurfat): vinzi `POST /api/extract-region` ca **API metered** către dezvoltatori/apps externe care n-au motor PDF. Margini mai bune + recurring usage.
+   - **NU** target Tutor (are fitz local). Target = consumeri externi.
+   - **Idee mai mare**: figure-extract e un singur endpoint — același pattern `api_access` poate împacheta TOT 4uPDF (merge/split/compress/convert/OCR/extract) ca **produs "PDF API" vandabil**, lane separat de freemium-ul B2C. De evaluat ca inițiativă proprie dacă vrei să mergi pe direcția asta.
 
 **Granițe**: separat complet de `split-ocr` (NO-TOUCH). Advanced va atinge `api.py` (ACTIVE, dar NU handler-ul split-ocr) — propose-confirm dacă e nevoie.
 
