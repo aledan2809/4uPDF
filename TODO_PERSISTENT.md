@@ -28,7 +28,7 @@
 
 ---
 
-## [~] ✂️ Extract Figure / Snip from PDF — region-crop tool (Basic LIVE; Advanced high-DPI LIVE; batch/OCR pending)
+## [~] ✂️ Extract Figure / Snip from PDF — region-crop tool (Basic LIVE; Advanced high-DPI + batch + OCR LIVE; only "Extra" — transparent/trim/SVG/TIFF — pending)
 
 **Origine (2026-06-03)**: Tutor avea nevoie de decuparea unor *desene/figuri* din PDF. Concluzia (corectă) a sesiunii Tutor: pentru flux **programatic headless** cu coordonate știute, `fitz.get_pixmap(clip=Rect)` local e mai curat — 4uPDF n-aduce plus ACOLO. **Dar** 4uPDF e produs diferit: unealtă **interactivă pentru om** (desenezi un dreptunghi pe pagină → primești zona ca imagine). Același motor (PyMuPDF/fitz), consumator diferit.
 
@@ -74,13 +74,13 @@
 - `/review` high → 4 fix-uri reale: cancel render în zbor înainte de doc swap (race), try/catch pointer-capture, clamp anti-rounding la export, exit(1) loud pe worker lipsă. Restul findings = false-positives (transform high-DPI = rețeta oficială pdf.js).
 - **Verificat**: tsc 0, build VPS 0, pagina 200 + randează, `/pdf.worker.min.mjs` 200 same-origin, split-ocr+vecini 200. **NEverificat headless**: fluxul interactiv real (render→drag→export PNG) — de testat în browser (construit pe API-ul documentat pdf.js v6 + typechecked).
 
-### Advanced — high-DPI DONE 2026-06-03 (LIVE, commit `db9e5ce`); batch/OCR pending
-1. **[x] Endpoint** `POST /api/extract-region` în `api.py` (NU split-ocr) — DONE. Client trimite fracții normalizate `{file, page, fx0/fy0/fx1/fy1 (0..1 top-left), dpi}` → `fitz.get_pixmap(clip=Rect, matrix=zoom(dpi))` → PNG. Gate `get_current_user_required` (login+ban) + `smart_tools` (paid). Guards: DPI clamp 72-1200, cap 30MP output, file-size limit, needs_pass, doc.close finally, render off-loaded pe `asyncio.to_thread`. UI: select DPI 300/600/1200 + "Export high-DPI PNG" pt. Pro, "Upgrade to unlock"/"Sign in" altfel; 403 server → upsell. **Verificat**: anon 401, free 403, silver 200 PNG real (2233×3368 @ 600 DPI). Path relativ `/api/extract-region` → nginx `/api/` → Python (fără schimbare nginx).
-2. **[ ] Batch**: aceeași regiune pe range de pagini / auto-extract toate figurile (`get_images` + heuristică bounding-box pe desene vectoriale).
-3. **[ ] OCR caption**: rulează OCR pe regiunea decupată (reuse motorul OCR existent) → text + imagine.
-4. **[ ] Extra**: fundal transparent, auto-trim margini albe, multi-format (PNG/TIFF), export SVG pt. vectorial.
-5. **[~] UI**: high-DPI live cu zid de upgrade; batch/OCR de adăugat ca opțiuni suplimentare când există.
-6. **[x] Gating**: refolosește `PlanLimits.smart_tools` + Stripe existente — fără billing nou. DONE pentru high-DPI.
+### Advanced — high-DPI DONE 2026-06-03 (LIVE); batch + OCR DONE 2026-06-04 (LIVE, commit `057ac4f`)
+1. **[x] Endpoint** `POST /api/extract-region` în `api.py` (NU split-ocr) — DONE. Client trimite fracții normalizate `{file, page, fx0/fy0/fx1/fy1 (0..1 top-left), dpi}` → `fitz.get_pixmap(clip=Rect, matrix=zoom(dpi))` → PNG. Gate `get_current_user_required` (login+ban) + `smart_tools` (paid). Guards: DPI clamp 72-1200, cap 30MP output, file-size limit, needs_pass, doc.close finally, render off-loaded pe `asyncio.to_thread`. UI: select DPI 300/600/1200 + "Export high-DPI PNG" pt. Pro, "Upgrade to unlock"/"Sign in" altfel; 403 server → upsell. **Verificat**: anon 401, free 403, silver 200 PNG real (2233×3368 @ 600 DPI). Path relativ `/api/extract-region` → nginx `/api/` → Python (fără schimbare nginx). **Refactor 2026-06-04**: extras în helperele partajate `_region_clip` + `_guard_region_pixels` (folosite de toate cele 3 endpoint-uri din familie → fără drift).
+2. **[x] Batch** — DONE 2026-06-04 (commit `057ac4f`, LIVE). `POST /api/extract-region-batch` aplică ACEEAȘI regiune pe un range de pagini (`page_from`/`page_to`, `0`=până la ultima) → ZIP de PNG-uri high-DPI. Gate `smart_tools`. Guards: cap 200 pagini (`MAX_REGION_BATCH_PAGES`) + cap cumulativ 300MB output (`MAX_REGION_BATCH_BYTES` — ZIP-ul se construiește în memorie) + per-render 30MP. UI: checkbox "All pages" / range from-to (NaN-safe). **Verificat live pe silver**: 200 application/zip, 3 intrări `figure-p{1,2,3}-300dpi.png`. (Auto-extract figuri vectoriale prin `get_images`+bounding-box = idee separată, NU livrată — batch-ul livrat e "same region across pages".)
+3. **[x] OCR** — DONE 2026-06-04 (commit `057ac4f`, LIVE). `POST /api/extract-region-ocr` rulează RapidOCR (`get_ocr()` reutilizat) pe regiunea decupată → JSON `{text, lines[]}`. Gate `smart_tools`. DPI clamp 150-600 (OCR plafonează sub print-DPI). UI: buton "Extract text (OCR)" + casetă text cu Copy. **Verificat live pe silver**: 200, text recunoscut corect din regiune (`Figure / 1: sample caption / TEXT-100`).
+4. **[ ] Extra** (pending): fundal transparent, auto-trim margini albe, multi-format (PNG/TIFF), export SVG pt. vectorial.
+5. **[x] UI**: high-DPI live cu zid de upgrade + batch range + OCR result panel (toate Pro-gated client-side, server re-verifică planul). Helpere partajate `buildRegionForm` + `downloadBlob`.
+6. **[x] Gating**: refolosește `PlanLimits.smart_tools` + Stripe existente — fără billing nou. DONE pentru high-DPI + batch + OCR.
 
 ### Best practices monetizare (regulile de aur, aplicate)
 - NU paywall pe comoditate (merge/split/compress/convert/extract-images) — SEO + funnel. Monetizezi **adâncimea** (DPI, batch, OCR, AI), nu accesul.
