@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import Link from "next/link";
 import ToolPageLayout from "../../components/ToolPageLayout";
 import FileUploadZone from "../../components/FileUploadZone";
 import type { PDFDocumentProxy } from "pdfjs-dist";
@@ -44,7 +43,7 @@ const faqs = [
   {
     question: "What resolution is the exported image?",
     answer:
-      "The free tool exports at your screen resolution. High-DPI export (300/600/1200 DPI), batch extraction and OCR of the cropped region are planned for the Advanced (Pro) version.",
+      "The tool exports at your screen resolution. Higher-DPI export, batch extraction and OCR of the cropped region are in development.",
   },
   {
     question: "Does it work with scanned or password-protected PDFs?",
@@ -426,18 +425,11 @@ export default function ExtractFigurePage() {
               </div>
             )}
 
-            {/* Advanced upsell (feature not built yet — kept honest + subtle) */}
-            <div className="mt-6 flex items-center justify-between flex-wrap gap-3 bg-gradient-to-r from-gray-900 to-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm text-gray-300">
-                Exported at screen resolution. High-DPI (300/600 DPI), batch and OCR export are coming to Pro.
-              </p>
-              <Link
-                href="/pricing"
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
-              >
-                See Plans
-              </Link>
-            </div>
+            {/* Honest note — high-DPI/batch/OCR are not built yet, so no upgrade
+                CTA is shown here (upgrading would unlock nothing for figures). */}
+            <p className="mt-6 text-sm text-gray-500">
+              Exported at screen resolution. Higher-DPI export is in development.
+            </p>
           </>
         )}
       </div>
