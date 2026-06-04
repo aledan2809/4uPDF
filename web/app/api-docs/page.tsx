@@ -29,8 +29,8 @@ export default function ApiDocsPage() {
           <h1 className="text-4xl font-bold text-white mb-4">PDF API</h1>
           <p className="text-gray-300 text-lg mb-10">
             Call 4uPDF&apos;s PDF engine from your own apps over a simple HTTP API: high-DPI figure
-            extraction (region → PNG, batch, OCR) plus core operations — merge, split, compress and
-            PDF-to-JPG. More tools (Word/Excel/PowerPoint conversion, OCR text layer) are on the way.
+            extraction (region → PNG, batch, OCR), core operations (merge, split, compress, PDF-to-JPG),
+            Office conversions (PDF ↔ Word/Excel/PowerPoint) and an OCR searchable-text layer.
           </p>
 
           <div className="space-y-10">
@@ -165,6 +165,86 @@ export default function ApiDocsPage() {
   -o images.zip`}</Code>
                   <p className="text-gray-500 text-xs mt-2"><code>dpi</code> 36–300 (default 150), <code>pages</code> = <code>all</code> or e.g. <code>1,3,5-7</code>.</p>
                 </div>
+
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    <span className="text-green-400">POST</span> /api/v1/pdf-to-word
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-3">Extract a PDF&apos;s text into an editable Word DOCX. Returns a <code className="px-1 bg-gray-800 rounded">.docx</code>.</p>
+                  <Code>{`curl -X POST ${BASE}/api/v1/pdf-to-word \\
+  -H "X-API-Key: $KEY" \\
+  -F "file=@doc.pdf" \\
+  -o converted.docx`}</Code>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    <span className="text-green-400">POST</span> /api/v1/word-to-pdf
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-3">Convert a Word DOCX to PDF. Returns <code className="px-1 bg-gray-800 rounded">application/pdf</code>.</p>
+                  <Code>{`curl -X POST ${BASE}/api/v1/word-to-pdf \\
+  -H "X-API-Key: $KEY" \\
+  -F "file=@doc.docx" \\
+  -o converted.pdf`}</Code>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    <span className="text-green-400">POST</span> /api/v1/pdf-to-excel
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-3">Extract PDF tables/text into an Excel XLSX. Returns a <code className="px-1 bg-gray-800 rounded">.xlsx</code>.</p>
+                  <Code>{`curl -X POST ${BASE}/api/v1/pdf-to-excel \\
+  -H "X-API-Key: $KEY" \\
+  -F "file=@statement.pdf" \\
+  -o converted.xlsx`}</Code>
+                  <p className="text-gray-500 text-xs mt-2">Detected tables are preserved; otherwise text is laid out by whitespace columns.</p>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    <span className="text-green-400">POST</span> /api/v1/excel-to-pdf
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-3">Convert an Excel XLSX to PDF. Returns <code className="px-1 bg-gray-800 rounded">application/pdf</code>.</p>
+                  <Code>{`curl -X POST ${BASE}/api/v1/excel-to-pdf \\
+  -H "X-API-Key: $KEY" \\
+  -F "file=@sheet.xlsx" \\
+  -o converted.pdf`}</Code>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    <span className="text-green-400">POST</span> /api/v1/pdf-to-powerpoint
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-3">Render each PDF page as a slide in a PowerPoint PPTX. Returns a <code className="px-1 bg-gray-800 rounded">.pptx</code>.</p>
+                  <Code>{`curl -X POST ${BASE}/api/v1/pdf-to-powerpoint \\
+  -H "X-API-Key: $KEY" \\
+  -F "file=@deck.pdf" \\
+  -o converted.pptx`}</Code>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    <span className="text-green-400">POST</span> /api/v1/powerpoint-to-pdf
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-3">Convert a PowerPoint PPTX to PDF. Returns <code className="px-1 bg-gray-800 rounded">application/pdf</code>.</p>
+                  <Code>{`curl -X POST ${BASE}/api/v1/powerpoint-to-pdf \\
+  -H "X-API-Key: $KEY" \\
+  -F "file=@deck.pptx" \\
+  -o converted.pdf`}</Code>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    <span className="text-green-400">POST</span> /api/v1/ocr-pdf
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-3">Add a searchable OCR text layer to a scanned PDF (text becomes selectable/searchable). Returns <code className="px-1 bg-gray-800 rounded">application/pdf</code>.</p>
+                  <Code>{`curl -X POST ${BASE}/api/v1/ocr-pdf \\
+  -H "X-API-Key: $KEY" \\
+  -F "file=@scan.pdf" \\
+  -F "dpi=300" \\
+  -o searchable.pdf`}</Code>
+                  <p className="text-gray-500 text-xs mt-2"><code>dpi</code> 150–400 (default 300). Up to 100 pages per request.</p>
+                </div>
               </div>
             </section>
 
@@ -175,6 +255,7 @@ export default function ApiDocsPage() {
                 <li>Max file size follows your plan&apos;s limit; oversize uploads return <code className="px-1 bg-gray-800 rounded">413</code>.</li>
                 <li>A degenerate selection, an out-of-range page, or a region too large at the chosen DPI returns <code className="px-1 bg-gray-800 rounded">400</code>.</li>
                 <li>Password-protected PDFs are not supported (<code className="px-1 bg-gray-800 rounded">400</code>) — remove the password first.</li>
+                <li>Office conversions are limited to 200 pages per request, and OCR to 100 pages (<code className="px-1 bg-gray-800 rounded">400</code> over the cap) — split large files first.</li>
               </ul>
             </section>
 

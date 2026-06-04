@@ -8239,6 +8239,439 @@ async def api_v1_pdf_to_jpg(
         headers={"Content-Disposition": 'attachment; filename="images.zip"'})
 
 
+# --- Phase 2b surface: Office conversions + OCR text layer --------------------
+# Same pure-Python engines as the web converters (fitz + python-docx / openpyxl
+# / python-pptx / Pillow / RapidOCR — no LibreOffice), but synchronous, in-memory
+# and direct-binary. Kept standalone so the public API never touches the live
+# web job/download-URL routes (same algorithm; intentional, low-drift duplication
+# documented in 4uPDF/TODO_PERSISTENT.md). Office MIME types:
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+MAX_OCR_PAGES = 100  # RapidOCR is per-page heavy — bound an API request
+
+
+def _v1_check_size(consumer: Dict[str, Any], content: bytes) -> None:
+    """Reject an upload over the consumer plan's per-file size limit (→ 413)."""
+    max_mb = get_user_plan_limits(consumer).get("max_file_size_mb") or 100
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
+
+
+def _open_office(content: bytes, kind: str):
+    """Open an uploaded DOCX/XLSX/PPTX from bytes, or raise 400 if it's not a
+    readable file of that type (e.g. a client sent a PDF to /word-to-pdf)."""
+    try:
+        if kind == "docx":
+            from docx import Document
+            return Document(io.BytesIO(content))
+        if kind == "xlsx":
+            from openpyxl import load_workbook
+            return load_workbook(io.BytesIO(content))
+        if kind == "pptx":
+            from pptx import Presentation
+            return Presentation(io.BytesIO(content))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Could not read the uploaded {kind.upper()} file")
+    raise HTTPException(status_code=500, detail=f"Unsupported office kind: {kind}")
+
+
+def _guard_convert_pages(doc) -> None:
+    """Cap a PDF-input conversion at MAX_REGION_BATCH_PAGES so a small upload
+    with thousands of pages can't exhaust memory on the public API."""
+    if doc.page_count > MAX_REGION_BATCH_PAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Conversion is limited to {MAX_REGION_BATCH_PAGES} pages per request",
+        )
+
+
+def _v1_pdf_to_word_bytes(content: bytes) -> bytes:
+    from docx import Document
+    doc = _open_region_pdf(content)
+    try:
+        _guard_convert_pages(doc)
+        word_doc = Document()
+        total = doc.page_count
+        for i, page in enumerate(doc):
+            text = page.get_text()
+            if text.strip():
+                for para in text.split("\n"):
+                    if para.strip():
+                        word_doc.add_paragraph(para)
+            if i < total - 1:
+                word_doc.add_page_break()
+        buf = io.BytesIO()
+        word_doc.save(buf)
+        return buf.getvalue()
+    finally:
+        doc.close()
+
+
+def _v1_word_to_pdf_bytes(content: bytes) -> bytes:
+    word_doc = _open_office(content, "docx")
+    pdf_doc = fitz.open()
+    try:
+        page = pdf_doc.new_page()
+        rect = fitz.Rect(50, 50, page.rect.width - 50, page.rect.height - 50)
+        full_text = "\n\n".join(p.text for p in word_doc.paragraphs if p.text.strip())
+        fontsize = 11
+        lines_per_page = max(1, int(rect.height / (fontsize * 1.5)))
+        current_page = page
+        line_count = 0
+        y_pos = rect.y0
+        for line in full_text.split("\n"):
+            if line_count >= lines_per_page:
+                current_page = pdf_doc.new_page()
+                y_pos = rect.y0
+                line_count = 0
+            current_page.insert_text(
+                (rect.x0, y_pos + fontsize), line[:100],
+                fontsize=fontsize, color=(0, 0, 0),
+                fontfile=UNICODE_FONT_PATH, fontname="F1")
+            y_pos += fontsize * 1.5
+            line_count += 1
+        return pdf_doc.tobytes(garbage=3, deflate=True)
+    finally:
+        pdf_doc.close()
+
+
+def _v1_pdf_to_excel_bytes(content: bytes) -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment
+    doc = _open_region_pdf(content)
+    try:
+        _guard_convert_pages(doc)
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "PDF Data"
+        total = doc.page_count
+        current_row = 1
+        for i, page in enumerate(doc):
+            page_tables = page.find_tables()
+            if page_tables and len(page_tables.tables) > 0:
+                for table in page_tables.tables:
+                    for row_idx, row in enumerate(table.extract()):
+                        for col_idx, cell in enumerate(row):
+                            obj = ws.cell(row=current_row, column=col_idx + 1, value=cell if cell else "")
+                            if row_idx == 0:
+                                obj.font = Font(bold=True)
+                            obj.alignment = Alignment(wrap_text=True, vertical="top")
+                        current_row += 1
+                    current_row += 1
+            else:
+                for line in page.get_text().strip().split("\n"):
+                    if not line.strip():
+                        continue
+                    cells = [c.strip() for c in line.split("\t") if c.strip()]
+                    if len(cells) == 1:
+                        cells = [c.strip() for c in re.split(r"\s{2,}", line) if c.strip()]
+                    if len(cells) == 1:
+                        cells = [line.strip()]
+                    for col_idx, cell in enumerate(cells, 1):
+                        try:
+                            if "." in cell or "," in cell:
+                                ws.cell(row=current_row, column=col_idx, value=float(cell.replace(",", ".").replace(" ", "")))
+                            else:
+                                ws.cell(row=current_row, column=col_idx, value=int(cell.replace(" ", "")))
+                        except (ValueError, AttributeError):
+                            ws.cell(row=current_row, column=col_idx, value=cell)
+                    current_row += 1
+            if i < total - 1:
+                current_row += 1
+        for column_cells in ws.columns:
+            max_length = 0
+            col = column_cells[0].column_letter
+            for cell in column_cells:
+                try:
+                    if cell.value:
+                        max_length = max(max_length, len(str(cell.value)))
+                except Exception:
+                    pass
+            ws.column_dimensions[col].width = min(max_length + 2, 50)
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+    finally:
+        doc.close()
+
+
+def _v1_excel_to_pdf_bytes(content: bytes) -> bytes:
+    wb = _open_office(content, "xlsx")
+    pdf_doc = fitz.open()
+    try:
+        fontsize = 10
+        margin = 50
+        line_height = fontsize * 1.5
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            page = pdf_doc.new_page()
+            rect = page.rect
+            y_pos = margin
+            max_rows = max(1, int((rect.height - 2 * margin) / line_height))
+            row_count = 0
+            for row in ws.iter_rows(values_only=True):
+                if row_count >= max_rows:
+                    page = pdf_doc.new_page()
+                    y_pos = margin
+                    row_count = 0
+                row_text = "\t".join(str(c) if c is not None else "" for c in row)
+                page.insert_text(
+                    (margin, y_pos + fontsize), row_text[:200],
+                    fontsize=fontsize, color=(0, 0, 0),
+                    fontfile=UNICODE_FONT_PATH, fontname="F1")
+                y_pos += line_height
+                row_count += 1
+        return pdf_doc.tobytes(garbage=3, deflate=True)
+    finally:
+        pdf_doc.close()
+
+
+def _v1_pdf_to_powerpoint_bytes(content: bytes) -> bytes:
+    from pptx import Presentation
+    from pptx.util import Inches
+    doc = _open_region_pdf(content)
+    try:
+        _guard_convert_pages(doc)
+        prs = Presentation()
+        prs.slide_width = Inches(10)
+        prs.slide_height = Inches(7.5)
+        for page in doc:
+            slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank layout
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))     # 2x for quality
+            slide.shapes.add_picture(
+                io.BytesIO(pix.tobytes("png")), Inches(0), Inches(0),
+                width=prs.slide_width, height=prs.slide_height)
+        buf = io.BytesIO()
+        prs.save(buf)
+        return buf.getvalue()
+    finally:
+        doc.close()
+
+
+def _v1_powerpoint_to_pdf_bytes(content: bytes) -> bytes:
+    from pptx.util import Pt
+    from PIL import Image as PILImage, ImageDraw, ImageFont
+    prs = _open_office(content, "pptx")
+    slide_width = prs.slide_width or 12192000   # EMU defaults (13.333 x 7.5 in)
+    slide_height = prs.slide_height or 6858000
+    pdf_width = 792
+    pdf_height = int(pdf_width * (slide_height / slide_width))
+    font_path = UNICODE_FONT_PATH or "arial.ttf"
+    pdf_doc = fitz.open()
+    try:
+        for slide in prs.slides:
+            img_width = 1920
+            img_height = int(1920 * (slide_height / slide_width))
+            img = PILImage.new("RGB", (img_width, img_height), "white")
+            draw = ImageDraw.Draw(img)
+            if hasattr(slide, "background") and slide.background.fill:
+                try:
+                    bg = slide.background.fill
+                    if bg.type is not None and hasattr(bg, "fore_color") and bg.fore_color:
+                        draw.rectangle([0, 0, img_width, img_height], fill=f"#{bg.fore_color.rgb}")
+                except Exception:
+                    pass
+            for shape in sorted(slide.shapes, key=lambda s: (s.top or 0)):
+                if not hasattr(shape, "left") or shape.left is None:
+                    continue
+                x = int((shape.left / slide_width) * img_width)
+                y = int((shape.top / slide_height) * img_height)
+                w = int((shape.width / slide_width) * img_width) if shape.width else img_width - x
+                h = int((shape.height / slide_height) * img_height) if shape.height else 50
+                if shape.shape_type == 13 and hasattr(shape, "image"):  # Picture
+                    try:
+                        shape_img = PILImage.open(io.BytesIO(shape.image.blob)).convert("RGBA")
+                        shape_img = shape_img.resize((max(w, 1), max(h, 1)), PILImage.LANCZOS)
+                        img.paste(shape_img, (x, y), shape_img)
+                    except Exception:
+                        pass
+                elif hasattr(shape, "text_frame"):
+                    try:
+                        text_y = y
+                        for para in shape.text_frame.paragraphs:
+                            if not para.text.strip():
+                                text_y += 20
+                                continue
+                            fs = 18
+                            font_color = (0, 0, 0)
+                            for run in para.runs:
+                                if run.font.size:
+                                    fs = int(run.font.size / Pt(1))
+                                if run.font.color and run.font.color.rgb:
+                                    rgb = str(run.font.color.rgb)
+                                    font_color = (int(rgb[0:2], 16), int(rgb[2:4], 16), int(rgb[4:6], 16))
+                            scaled_fs = max(int(fs * img_width / 1920 * 1.5), 10)
+                            try:
+                                font = ImageFont.truetype(font_path, scaled_fs)
+                            except Exception:
+                                font = ImageFont.load_default()
+                            draw.text((x + 5, text_y), para.text, fill=font_color, font=font)
+                            text_y += scaled_fs + 4
+                    except Exception:
+                        pass
+                elif getattr(shape, "has_table", False):
+                    try:
+                        table = shape.table
+                        rows = len(table.rows)
+                        cols = len(table.columns)
+                        cell_w = w // max(cols, 1)
+                        cell_h = h // max(rows, 1)
+                        for r_idx, row in enumerate(table.rows):
+                            for c_idx, cell in enumerate(row.cells):
+                                cx = x + c_idx * cell_w
+                                cy = y + r_idx * cell_h
+                                draw.rectangle([cx, cy, cx + cell_w, cy + cell_h], outline=(180, 180, 180))
+                                try:
+                                    font = ImageFont.truetype(font_path, max(int(12 * img_width / 1920 * 1.5), 8))
+                                except Exception:
+                                    font = ImageFont.load_default()
+                                draw.text((cx + 3, cy + 3), cell.text[:50], fill=(0, 0, 0), font=font)
+                    except Exception:
+                        pass
+            img_buf = io.BytesIO()
+            img.save(img_buf, format="PNG")
+            page = pdf_doc.new_page(width=pdf_width, height=pdf_height)
+            page.insert_image(page.rect, stream=img_buf.getvalue())
+        return pdf_doc.tobytes(garbage=3, deflate=True)
+    finally:
+        pdf_doc.close()
+
+
+def _v1_ocr_layer_pdf_bytes(content: bytes, dpi: int) -> bytes:
+    dpi = max(150, min(int(dpi), 400))
+    ocr = get_ocr()
+    doc = _open_region_pdf(content)
+    try:
+        if doc.page_count > MAX_OCR_PAGES:
+            raise HTTPException(status_code=400, detail=f"OCR is limited to {MAX_OCR_PAGES} pages per request")
+        new_doc = fitz.open()
+        try:
+            for i in range(doc.page_count):
+                page = doc[i]
+                pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72, dpi / 72))
+                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+                if pix.n == 4:
+                    img = img[:, :, :3]
+                result, _ = ocr(img)
+                new_page = new_doc.new_page(width=page.rect.width, height=page.rect.height)
+                new_page.show_pdf_page(new_page.rect, doc, i)
+                if result:
+                    scale_x = page.rect.width / pix.width
+                    scale_y = page.rect.height / pix.height
+                    for item in result:
+                        box, text = item[0], item[1]
+                        x0 = min(p[0] for p in box) * scale_x
+                        y0 = min(p[1] for p in box) * scale_y
+                        x1 = max(p[0] for p in box) * scale_x
+                        y1 = max(p[1] for p in box) * scale_y
+                        fontsize = max(6, min(12, (y1 - y0) * 0.8))
+                        new_page.insert_text(
+                            (x0, y1 - 2), text, fontsize=fontsize,
+                            color=(1, 1, 1), render_mode=3,
+                            fontfile=UNICODE_FONT_PATH, fontname="F1")
+            return new_doc.tobytes(garbage=3, deflate=True)
+        finally:
+            new_doc.close()
+    finally:
+        doc.close()
+
+
+@app.post("/api/v1/pdf-to-word")
+async def api_v1_pdf_to_word(
+    file: UploadFile = File(...),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: extract a PDF's text into an editable Word DOCX."""
+    content = await file.read()
+    _v1_check_size(consumer, content)
+    data = await asyncio.to_thread(_v1_pdf_to_word_bytes, content)
+    return StreamingResponse(io.BytesIO(data), media_type=DOCX_MIME,
+        headers={"Content-Disposition": 'attachment; filename="converted.docx"'})
+
+
+@app.post("/api/v1/word-to-pdf")
+async def api_v1_word_to_pdf(
+    file: UploadFile = File(...),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: convert a Word DOCX to PDF. Returns application/pdf."""
+    content = await file.read()
+    _v1_check_size(consumer, content)
+    data = await asyncio.to_thread(_v1_word_to_pdf_bytes, content)
+    return StreamingResponse(io.BytesIO(data), media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="converted.pdf"'})
+
+
+@app.post("/api/v1/pdf-to-excel")
+async def api_v1_pdf_to_excel(
+    file: UploadFile = File(...),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: extract PDF tables/text into an Excel XLSX."""
+    content = await file.read()
+    _v1_check_size(consumer, content)
+    data = await asyncio.to_thread(_v1_pdf_to_excel_bytes, content)
+    return StreamingResponse(io.BytesIO(data), media_type=XLSX_MIME,
+        headers={"Content-Disposition": 'attachment; filename="converted.xlsx"'})
+
+
+@app.post("/api/v1/excel-to-pdf")
+async def api_v1_excel_to_pdf(
+    file: UploadFile = File(...),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: convert an Excel XLSX to PDF. Returns application/pdf."""
+    content = await file.read()
+    _v1_check_size(consumer, content)
+    data = await asyncio.to_thread(_v1_excel_to_pdf_bytes, content)
+    return StreamingResponse(io.BytesIO(data), media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="converted.pdf"'})
+
+
+@app.post("/api/v1/pdf-to-powerpoint")
+async def api_v1_pdf_to_powerpoint(
+    file: UploadFile = File(...),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: render each PDF page as a slide in a PowerPoint PPTX."""
+    content = await file.read()
+    _v1_check_size(consumer, content)
+    data = await asyncio.to_thread(_v1_pdf_to_powerpoint_bytes, content)
+    return StreamingResponse(io.BytesIO(data), media_type=PPTX_MIME,
+        headers={"Content-Disposition": 'attachment; filename="converted.pptx"'})
+
+
+@app.post("/api/v1/powerpoint-to-pdf")
+async def api_v1_powerpoint_to_pdf(
+    file: UploadFile = File(...),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: convert a PowerPoint PPTX to PDF. Returns application/pdf."""
+    content = await file.read()
+    _v1_check_size(consumer, content)
+    data = await asyncio.to_thread(_v1_powerpoint_to_pdf_bytes, content)
+    return StreamingResponse(io.BytesIO(data), media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="converted.pdf"'})
+
+
+@app.post("/api/v1/ocr-pdf")
+async def api_v1_ocr_pdf(
+    file: UploadFile = File(...),
+    dpi: int = Form(300),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: add a searchable OCR text layer to a scanned PDF (so the
+    text can be selected/searched). Returns the same PDF, now searchable."""
+    content = await file.read()
+    _v1_check_size(consumer, content)
+    data = await asyncio.to_thread(_v1_ocr_layer_pdf_bytes, content, dpi)
+    return StreamingResponse(io.BytesIO(data), media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="searchable.pdf"'})
+
+
 @app.post("/api/api-keys")
 async def create_api_key(
     name: str = Form(""),
