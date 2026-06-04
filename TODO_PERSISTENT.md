@@ -100,7 +100,7 @@ Backend-ul Advanced nu e doar fix de onestitate, e **venit**, pe două suprafeț
 
 ---
 
-## [~] 💼 B2B "PDF API" — produs vandabil (api_access tier) — Phase 1 DONE 2026-06-04 (LIVE, commit `fe83452`)
+## [~] 💼 B2B "PDF API" — produs vandabil (api_access tier) — Phase 1+2 DONE 2026-06-04 (LIVE, commits `fe83452` + `f3de997`)
 
 **Scop**: vinde motorul 4uPDF ca API metered către dezvoltatori externi (lane separat de freemium-ul B2C). Decizii (confirmate cu user 2026-06-04): namespace nou `/api/v1/*` (separat de rutele web) · billing = **abonament gold preplătit + cotă lunară inclusă + plafon dur (429), fără overage** (zero risc de datorie; best practice pentru self-serve) · Phase 1 = doar verticalul flagship, complet end-to-end.
 
@@ -113,7 +113,12 @@ Backend-ul Advanced nu e doar fix de onestitate, e **venit**, pe două suprafeț
 - **Prefix `pdf_live_`** (NU `sk_live_` — colida cu Stripe + declanșa GitHub secret-scanning; namespace propriu = best practice).
 - **Verificat live** (cont e2e ridicat temporar la gold+active, **revertat garantat la free**): /api-docs 200 · anon/invalid key 401 · free create-key 403 · gold create→`pdf_live_…` · list `api_access=True quota=10000` · key→200 PNG + 200 OCR (text corect) · revoke→200 apoi cheie revocată→401. split-ocr (NO-TOUCH) + vecini 200, fără regresie.
 
-**Phase 2 — pending**: extinde suprafața `/api/v1/*` (merge/split/compress/convert/ocr-layer).
+**Phase 2 — DONE 2026-06-04 (LIVE, commit `f3de997`)**: extins suprafața `/api/v1/*` cu operațiile core, **purpose-built pentru API** (sincron, in-memory, răspuns binar direct — NU pattern-ul async job+download-URL al web-app-ului → zero modificări pe rutele web):
+- `POST /api/v1/merge` (2..50 PDF-uri → `application/pdf`), `POST /api/v1/split` (ranges `1-3,4,5-7` | `all` → ZIP de PDF-uri), `POST /api/v1/compress` (quality low|medium|high → `application/pdf`), `POST /api/v1/pdf-to-jpg` (dpi 36-300, pages → ZIP de JPG-uri).
+- Toate key-authed (`get_api_consumer`, aceeași cotă/metering). Guards: limită size per-plan, cap 50 fișiere merge, cap 200 output + 300MB cumulativ pe ZIP-uri, reject PDF cu parolă. `/api-docs` actualizat.
+- **Verificat live pe gold** (revertat la free): merge→200 PDF (2 pagini), split→200 ZIP `[p1-2.pdf, p3.pdf]`, compress→200 PDF, pdf-to-jpg→200 ZIP (3 JPG). split-ocr + web tools 200, fără regresie.
+- **Phase 2b — pending**: Word/Excel/PowerPoint conversion + OCR text-layer (depind de convertoare externe / pipeline-uri mai grele; web-versions folosesc pattern job/file).
+
 **Phase 3 — pending**: billing pe consum (Stripe metered) SAU credite preplătite (top-up) + rate-limit per-cheie + grafice usage în dashboard.
 
 ---
