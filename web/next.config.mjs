@@ -1,12 +1,13 @@
-// Content-Security-Policy — shipped as Report-Only first (G-4UPDF-CSP-001): it
-// only reports violations to the browser console, blocks nothing, so we can watch
-// for breakage before flipping to enforce. Covers what the app actually loads:
-// Next.js inline hydration + the inline GA/heartbeat/pageview scripts in
-// layout.tsx ('unsafe-inline'), Google Analytics (gtag), the self-hosted pdf.js
-// worker (blob:), CAS cross-promo beacons to ma.techbiz.ae, and remote ad images.
-const cspReportOnly = [
+// Content-Security-Policy (G-4UPDF-CSP-001) — ENFORCING (shipped Report-Only
+// first in 2ec26b2; enforced 2026-06-04). Covers what the app loads: Next.js
+// inline hydration + the inline GA/heartbeat/pageview scripts in layout.tsx
+// ('unsafe-inline'), Google Analytics (gtag), Chart.js on superadmin
+// (cdn.jsdelivr), the self-hosted pdf.js worker (blob: + 'wasm-unsafe-eval' for
+// pdf.js WASM image decoders), CAS beacons to ma.techbiz.ae, remote ad images.
+// ROLLBACK: switch the header key below back to 'Content-Security-Policy-Report-Only'.
+const cspPolicy = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://www.google-analytics.com https://cdn.jsdelivr.net",
+  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://www.googletagmanager.com https://www.google-analytics.com https://cdn.jsdelivr.net",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
@@ -79,8 +80,8 @@ const nextConfig = {
             value: 'geolocation=(), microphone=(), camera=()'
           },
           {
-            key: 'Content-Security-Policy-Report-Only',
-            value: cspReportOnly
+            key: 'Content-Security-Policy',
+            value: cspPolicy
           }
         ]
       }
