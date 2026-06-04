@@ -7650,6 +7650,49 @@ def get_batch_processing_status(job_id: str):
     return response
 
 
+# Hard ceiling on a single high-DPI render (pixels), shared by the whole
+# /api/extract-region* family so one big crop can't OOM the worker.
+MAX_REGION_PIXELS = 30_000_000
+# A batch covers the same region across many pages; cap the page count so a
+# 2000-page book at 1200 DPI can't be requested in one shot.
+MAX_REGION_BATCH_PAGES = 200
+# The whole ZIP is built in an in-memory BytesIO before streaming, so cap the
+# cumulative PNG payload — the per-render pixel guard alone doesn't bound the
+# sum across many pages.
+MAX_REGION_BATCH_BYTES = 300 * 1024 * 1024  # 300 MB of PNGs
+
+
+def _region_clip(pg, fx0: float, fy0: float, fx1: float, fy1: float) -> "fitz.Rect":
+    """Map a normalised (0..1, top-left origin) selection onto a fitz page rect.
+
+    The client sends the selection as fractions of the page so we never depend
+    on PDF-native coordinate quirks; fitz page.rect is also top-left / y-down,
+    so the mapping is direct. Drag-direction agnostic. Raises HTTPException(400)
+    on a degenerate selection. Shared by the three /api/extract-region*
+    endpoints so their geometry can never drift apart.
+    """
+    a0, a1 = sorted((max(0.0, min(fx0, 1.0)), max(0.0, min(fx1, 1.0))))
+    b0, b1 = sorted((max(0.0, min(fy0, 1.0)), max(0.0, min(fy1, 1.0))))
+    if (a1 - a0) < 0.001 or (b1 - b0) < 0.001:
+        raise HTTPException(status_code=400, detail="Selection is too small")
+    r = pg.rect
+    return fitz.Rect(
+        r.x0 + a0 * r.width,
+        r.y0 + b0 * r.height,
+        r.x0 + a1 * r.width,
+        r.y0 + b1 * r.height,
+    )
+
+
+def _guard_region_pixels(clip: "fitz.Rect", zoom: float) -> None:
+    """Reject a render whose output would exceed MAX_REGION_PIXELS."""
+    if (clip.width * zoom) * (clip.height * zoom) > MAX_REGION_PIXELS:
+        raise HTTPException(
+            status_code=400,
+            detail="Region too large at this DPI — lower the DPI or select a smaller area",
+        )
+
+
 @app.post("/api/extract-region")
 async def extract_region(
     file: UploadFile = File(...),
@@ -7663,10 +7706,7 @@ async def extract_region(
 ):
     """Render a rectangular region of a PDF page to a high-DPI PNG (Pro).
 
-    The client sends the selection as normalised fractions of the page
-    (0..1, top-left origin) so we never depend on PDF-native coordinate
-    quirks. fitz page.rect is also top-left / y-down, so the mapping is
-    direct. This is the paid Advanced counterpart of the free, client-side
+    This is the paid Advanced counterpart of the free, client-side
     /tools/extract-figure tool. NOT related to the split-ocr handler.
     """
     limits = get_user_plan_limits(user)
@@ -7674,11 +7714,6 @@ async def extract_region(
         raise HTTPException(status_code=403, detail="High-DPI figure export requires a Pro plan")
 
     dpi = max(72, min(int(dpi), 1200))
-    # Clamp to the page and normalise ordering (drag direction agnostic).
-    a0, a1 = sorted((max(0.0, min(fx0, 1.0)), max(0.0, min(fx1, 1.0))))
-    b0, b1 = sorted((max(0.0, min(fy0, 1.0)), max(0.0, min(fy1, 1.0))))
-    if (a1 - a0) < 0.001 or (b1 - b0) < 0.001:
-        raise HTTPException(status_code=400, detail="Selection is too small")
 
     content = await file.read()
     max_mb = limits.get("max_file_size_mb") or 100
@@ -7696,20 +7731,9 @@ async def extract_region(
         if page < 1 or page > doc.page_count:
             raise HTTPException(status_code=400, detail="Page out of range")
         pg = doc[page - 1]
-        r = pg.rect
-        clip = fitz.Rect(
-            r.x0 + a0 * r.width,
-            r.y0 + b0 * r.height,
-            r.x0 + a1 * r.width,
-            r.y0 + b1 * r.height,
-        )
+        clip = _region_clip(pg, fx0, fy0, fx1, fy1)
         zoom = dpi / 72.0
-        # Guard against an enormous allocation (huge area at high DPI).
-        if (clip.width * zoom) * (clip.height * zoom) > 30_000_000:
-            raise HTTPException(
-                status_code=400,
-                detail="Region too large at this DPI — lower the DPI or select a smaller area",
-            )
+        _guard_region_pixels(clip, zoom)
         # Offload the CPU-bound render off the event loop (mirrors how the
         # batch tools use a thread pool) so a big high-DPI render doesn't
         # stall other requests.
@@ -7726,6 +7750,146 @@ async def extract_region(
         media_type="image/png",
         headers={"Content-Disposition": 'attachment; filename="figure.png"'},
     )
+
+
+@app.post("/api/extract-region-batch")
+async def extract_region_batch(
+    file: UploadFile = File(...),
+    fx0: float = Form(...),
+    fy0: float = Form(...),
+    fx1: float = Form(...),
+    fy1: float = Form(...),
+    dpi: int = Form(300),
+    page_from: int = Form(1),
+    page_to: int = Form(0),  # 0 => through the last page
+    user: Dict[str, Any] = Depends(get_current_user_required),
+):
+    """Render the SAME region across a page range to high-DPI PNGs, returned as
+    a ZIP (Pro). Same engine + coordinates as /api/extract-region; the selection
+    is applied to every page in [page_from, page_to]. Useful for snipping the
+    same chart/figure off every page of a report. NOT split-ocr.
+    """
+    limits = get_user_plan_limits(user)
+    if not limits.get("smart_tools"):
+        raise HTTPException(status_code=403, detail="Batch figure export requires a Pro plan")
+
+    dpi = max(72, min(int(dpi), 1200))
+
+    content = await file.read()
+    max_mb = limits.get("max_file_size_mb") or 100
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
+
+    try:
+        doc = fitz.open(stream=content, filetype="pdf")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not open this PDF")
+
+    try:
+        if doc.needs_pass:
+            raise HTTPException(status_code=400, detail="Password-protected PDFs are not supported")
+        total = doc.page_count
+        start = max(1, int(page_from))
+        end = int(page_to) if int(page_to) > 0 else total
+        end = min(end, total)
+        if start > end:
+            raise HTTPException(status_code=400, detail="Invalid page range")
+        if (end - start + 1) > MAX_REGION_BATCH_PAGES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Batch is limited to {MAX_REGION_BATCH_PAGES} pages — narrow the range",
+            )
+
+        zoom = dpi / 72.0
+
+        def _render_zip():
+            buf = io.BytesIO()
+            total_bytes = 0
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for n in range(start, end + 1):
+                    pg = doc[n - 1]
+                    clip = _region_clip(pg, fx0, fy0, fx1, fy1)
+                    _guard_region_pixels(clip, zoom)
+                    pix = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
+                    png = pix.tobytes("png")
+                    total_bytes += len(png)
+                    if total_bytes > MAX_REGION_BATCH_BYTES:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Batch output is too large — narrow the page range or lower the DPI",
+                        )
+                    zf.writestr(f"figure-p{n}-{dpi}dpi.png", png)
+            buf.seek(0)
+            return buf
+
+        buf = await asyncio.to_thread(_render_zip)
+    finally:
+        doc.close()
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="figures.zip"'},
+    )
+
+
+@app.post("/api/extract-region-ocr")
+async def extract_region_ocr(
+    file: UploadFile = File(...),
+    page: int = Form(...),
+    fx0: float = Form(...),
+    fy0: float = Form(...),
+    fx1: float = Form(...),
+    fy1: float = Form(...),
+    dpi: int = Form(300),
+    user: Dict[str, Any] = Depends(get_current_user_required),
+):
+    """OCR a selected region and return the recognised text (Pro). Renders the
+    region with fitz then runs the shared RapidOCR engine. Same coordinates as
+    /api/extract-region. NOT split-ocr.
+    """
+    limits = get_user_plan_limits(user)
+    if not limits.get("smart_tools"):
+        raise HTTPException(status_code=403, detail="Region OCR requires a Pro plan")
+
+    # OCR accuracy plateaus well below print DPI, so clamp to a sane band — a
+    # 1200-DPI crop would just stall RapidOCR with no recognition gain.
+    dpi = max(150, min(int(dpi), 600))
+
+    content = await file.read()
+    max_mb = limits.get("max_file_size_mb") or 100
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
+
+    try:
+        doc = fitz.open(stream=content, filetype="pdf")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not open this PDF")
+
+    try:
+        if doc.needs_pass:
+            raise HTTPException(status_code=400, detail="Password-protected PDFs are not supported")
+        if page < 1 or page > doc.page_count:
+            raise HTTPException(status_code=400, detail="Page out of range")
+        pg = doc[page - 1]
+        clip = _region_clip(pg, fx0, fy0, fx1, fy1)
+        zoom = dpi / 72.0
+        _guard_region_pixels(clip, zoom)
+
+        def _ocr():
+            pix = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+            # RapidOCR wants 3-channel RGB; drop the alpha plane if present.
+            if pix.n == 4:
+                img = img[:, :, :3]
+            result, _ = get_ocr()(img)
+            return [r[1] for r in result] if result else []
+
+        lines = await asyncio.to_thread(_ocr)
+    finally:
+        doc.close()
+
+    return JSONResponse({"text": "\n".join(lines), "lines": lines})
 
 
 if __name__ == "__main__":

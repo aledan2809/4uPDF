@@ -45,7 +45,7 @@ const faqs = [
   {
     question: "What resolution is the exported image?",
     answer:
-      "The free export uses your screen resolution. Pro plans can export the selected region at 300, 600 or 1200 DPI — crisp enough for print or slides. Batch extraction and OCR of the region are in development.",
+      "The free export uses your screen resolution. Pro plans can export the selected region at 300, 600 or 1200 DPI — crisp enough for print or slides. Pro also adds batch extraction (the same region across a page range, downloaded as a ZIP) and OCR of the selected region (recognise its text).",
   },
   {
     question: "Does it work with scanned or password-protected PDFs?",
@@ -86,6 +86,14 @@ export default function ExtractFigurePage() {
   const [dpi, setDpi] = useState(300);
   const [hiExporting, setHiExporting] = useState(false);
   const [upsell, setUpsell] = useState<string | null>(null);
+  // Batch (same region across a page range → ZIP) + OCR (text of the region).
+  const [batchAll, setBatchAll] = useState(true);
+  const [batchFrom, setBatchFrom] = useState(1);
+  const [batchTo, setBatchTo] = useState(1);
+  const [batchExporting, setBatchExporting] = useState(false);
+  const [ocrRunning, setOcrRunning] = useState(false);
+  const [ocrText, setOcrText] = useState<string | null>(null);
+  const [ocrCopied, setOcrCopied] = useState(false);
 
   const fileRef = useRef<File | null>(null);
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
@@ -179,6 +187,10 @@ export default function ExtractFigurePage() {
         setFileName(file.name);
         setNumPages(doc.numPages);
         setPageNum(1);
+        setBatchFrom(1);
+        setBatchTo(doc.numPages);
+        setBatchAll(true);
+        setOcrText(null);
         // Wait a tick so the canvas is mounted before the first render.
         requestAnimationFrame(() => {
           renderPage(1).catch(() => setError("Could not render this PDF."));
@@ -204,6 +216,7 @@ export default function ExtractFigurePage() {
     (n: number) => {
       if (n < 1 || n > numPages) return;
       setSel(null);
+      setOcrText(null);
       setPageNum(n);
       renderPage(n).catch(() => setError("Could not render this page."));
     },
@@ -248,6 +261,8 @@ export default function ExtractFigurePage() {
     const p = clampToCanvas(e.clientX, e.clientY);
     dragStartRef.current = p;
     setSel({ x: p.x, y: p.y, w: 0, h: 0 });
+    // The previous OCR text belonged to the previous selection — drop it.
+    setOcrText(null);
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -306,28 +321,46 @@ export default function ExtractFigurePage() {
     }, "image/png");
   }, [sel, fileName, pageNum]);
 
-  // Advanced (Pro): server-side high-DPI render of the same region. Sends the
-  // selection as page fractions (top-left origin) so the backend maps it onto
-  // fitz page.rect without coordinate-system guesswork.
-  const exportHighDpi = useCallback(async () => {
+  // Builds the FormData common to all Advanced (Pro) endpoints: the file plus
+  // the selection as page fractions (0..1, top-left origin) so the backend maps
+  // it onto fitz page.rect without coordinate-system guesswork. Returns null
+  // when there is no usable selection. Callers add page/dpi/range as needed.
+  const buildRegionForm = useCallback((): FormData | null => {
     const canvas = canvasRef.current;
     const file = fileRef.current;
-    if (!canvas || !file || !sel || sel.w < MIN_SELECTION_PX || sel.h < MIN_SELECTION_PX) return;
-    if (!user) {
-      setUpsell("Sign in with a Pro plan to export high-DPI images.");
-      return;
-    }
+    if (!canvas || !file || !sel || sel.w < MIN_SELECTION_PX || sel.h < MIN_SELECTION_PX) return null;
     const cw = canvas.clientWidth || 1;
     const ch = canvas.clientHeight || 1;
     const clamp01 = (v: number) => Math.max(0, Math.min(v, 1));
-
     const form = new FormData();
     form.append("file", file);
-    form.append("page", String(pageNum));
     form.append("fx0", String(clamp01(sel.x / cw)));
     form.append("fy0", String(clamp01(sel.y / ch)));
     form.append("fx1", String(clamp01((sel.x + sel.w) / cw)));
     form.append("fy1", String(clamp01((sel.y + sel.h) / ch)));
+    return form;
+  }, [sel]);
+
+  const downloadBlob = (blob: Blob, name: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  // Advanced (Pro): server-side high-DPI render of the selected region.
+  const exportHighDpi = useCallback(async () => {
+    const form = buildRegionForm();
+    if (!form) return;
+    if (!user) {
+      setUpsell("Sign in with a Pro plan to export high-DPI images.");
+      return;
+    }
+    form.append("page", String(pageNum));
     form.append("dpi", String(dpi));
 
     setUpsell(null);
@@ -353,22 +386,117 @@ export default function ExtractFigurePage() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data?.detail || "High-DPI export failed. Please try again.");
       }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
       const base = (fileName || "figure").replace(/\.pdf$/i, "");
-      a.href = url;
-      a.download = `${base}-p${pageNum}-figure-${dpi}dpi.png`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(await res.blob(), `${base}-p${pageNum}-figure-${dpi}dpi.png`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "High-DPI export failed.");
     } finally {
       setHiExporting(false);
     }
-  }, [sel, user, getToken, pageNum, dpi, fileName]);
+  }, [buildRegionForm, user, getToken, pageNum, dpi, fileName]);
+
+  // Advanced (Pro): apply the same region to a page range → ZIP of PNGs.
+  const exportBatch = useCallback(async () => {
+    const form = buildRegionForm();
+    if (!form) return;
+    if (!user) {
+      setUpsell("Sign in with a Pro plan to batch-extract figures.");
+      return;
+    }
+    // Clearing a number input yields NaN — coerce to a valid page so we never
+    // POST "NaN" (which the backend would reject with a 422).
+    const clampPage = (v: number) => (Number.isFinite(v) ? Math.max(1, Math.min(Math.round(v), numPages)) : 1);
+    const from = batchAll ? 1 : clampPage(batchFrom);
+    const to = batchAll ? numPages : Math.max(from, clampPage(batchTo));
+    form.append("dpi", String(dpi));
+    form.append("page_from", String(from));
+    form.append("page_to", String(to));
+
+    setUpsell(null);
+    setError(null);
+    setBatchExporting(true);
+    try {
+      const token = getToken();
+      const res = await fetch("/api/extract-region-batch", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: form,
+      });
+      if (res.status === 401) {
+        setUpsell("Your session expired. Please sign in again.");
+        return;
+      }
+      if (res.status === 403) {
+        setUpsell("Batch extraction is a Pro feature — upgrade your plan to unlock it.");
+        return;
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.detail || "Batch extraction failed. Please try again.");
+      }
+      const base = (fileName || "figure").replace(/\.pdf$/i, "");
+      downloadBlob(await res.blob(), `${base}-figures-${dpi}dpi.zip`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Batch extraction failed.");
+    } finally {
+      setBatchExporting(false);
+    }
+  }, [buildRegionForm, user, getToken, batchAll, batchFrom, batchTo, numPages, dpi, fileName]);
+
+  // Advanced (Pro): OCR the selected region → recognised text.
+  const runOcr = useCallback(async () => {
+    const form = buildRegionForm();
+    if (!form) return;
+    if (!user) {
+      setUpsell("Sign in with a Pro plan to OCR a region.");
+      return;
+    }
+    form.append("page", String(pageNum));
+    form.append("dpi", String(dpi));
+
+    setUpsell(null);
+    setError(null);
+    setOcrText(null);
+    setOcrCopied(false);
+    setOcrRunning(true);
+    try {
+      const token = getToken();
+      const res = await fetch("/api/extract-region-ocr", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: form,
+      });
+      if (res.status === 401) {
+        setUpsell("Your session expired. Please sign in again.");
+        return;
+      }
+      if (res.status === 403) {
+        setUpsell("Region OCR is a Pro feature — upgrade your plan to unlock it.");
+        return;
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.detail || "OCR failed. Please try again.");
+      }
+      const data = await res.json();
+      setOcrText(typeof data?.text === "string" ? data.text : "");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OCR failed.");
+    } finally {
+      setOcrRunning(false);
+    }
+  }, [buildRegionForm, user, getToken, pageNum, dpi]);
+
+  const copyOcr = useCallback(async () => {
+    if (!ocrText) return;
+    try {
+      await navigator.clipboard.writeText(ocrText);
+      setOcrCopied(true);
+      setTimeout(() => setOcrCopied(false), 1500);
+    } catch {
+      /* clipboard may be blocked; the text stays selectable in the box */
+    }
+  }, [ocrText]);
 
   const reset = () => {
     try {
@@ -386,6 +514,10 @@ export default function ExtractFigurePage() {
     setPageNum(1);
     setSel(null);
     setError(null);
+    setOcrText(null);
+    setBatchAll(true);
+    setBatchFrom(1);
+    setBatchTo(1);
   };
 
   const hasSelection = !!sel && sel.w >= MIN_SELECTION_PX && sel.h >= MIN_SELECTION_PX;
@@ -551,6 +683,105 @@ export default function ExtractFigurePage() {
                   </Link>
                 )}
               </div>
+
+              {/* Batch + OCR — available to Pro tiers; the server re-checks the plan */}
+              {isPro && (
+                <div className="mt-4 pt-4 border-t border-gray-700 space-y-4">
+                  {/* Batch: same region across a page range → ZIP */}
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-white">Batch — same region across pages</p>
+                      <p className="text-xs text-gray-400">
+                        Apply this exact selection to a page range and download a ZIP of PNGs (at the DPI above).
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={batchAll}
+                          onChange={(e) => setBatchAll(e.target.checked)}
+                          className="accent-blue-600"
+                        />
+                        All pages
+                      </label>
+                      {!batchAll && (
+                        <div className="flex items-center gap-1 text-xs text-gray-300">
+                          <input
+                            type="number"
+                            min={1}
+                            max={numPages}
+                            value={batchFrom}
+                            onChange={(e) => setBatchFrom(Number(e.target.value))}
+                            className="w-16 bg-gray-800 border border-gray-700 rounded-lg text-white px-2 py-1.5"
+                            aria-label="From page"
+                          />
+                          <span>–</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={numPages}
+                            value={batchTo}
+                            onChange={(e) => setBatchTo(Number(e.target.value))}
+                            className="w-16 bg-gray-800 border border-gray-700 rounded-lg text-white px-2 py-1.5"
+                            aria-label="To page"
+                          />
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={exportBatch}
+                        disabled={!hasSelection || batchExporting}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
+                      >
+                        {batchExporting ? "Extracting…" : "Export batch (ZIP)"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* OCR: recognise the text inside the region */}
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-white">OCR — read text in the region</p>
+                      <p className="text-xs text-gray-400">
+                        Recognise the text inside your selection — a figure caption, label or table cell.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={runOcr}
+                      disabled={!hasSelection || ocrRunning}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
+                    >
+                      {ocrRunning ? "Reading…" : "Extract text (OCR)"}
+                    </button>
+                  </div>
+
+                  {ocrText !== null && (
+                    <div className="bg-gray-950 border border-gray-800 rounded-lg p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-gray-400">Recognised text</span>
+                        <button
+                          type="button"
+                          onClick={copyOcr}
+                          disabled={!ocrText}
+                          className="text-xs text-blue-400 hover:text-blue-300 disabled:text-gray-600"
+                        >
+                          {ocrCopied ? "Copied!" : "Copy"}
+                        </button>
+                      </div>
+                      <textarea
+                        readOnly
+                        value={ocrText || ""}
+                        placeholder="No text was found in this region."
+                        rows={Math.min(8, Math.max(2, (ocrText || "").split("\n").length))}
+                        className="w-full bg-transparent text-sm text-gray-200 resize-y outline-none placeholder:text-gray-600"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
               {upsell && (
                 <div className="mt-3 flex items-center justify-between flex-wrap gap-2 text-sm">
                   <span className="text-yellow-300">{upsell}</span>
