@@ -24,7 +24,7 @@
 - Generalizează prin `ToolPageLayout` (un nou slot de ad configurabil), NU special-case per pagină — păstrează `hideAdBanners` existent.
 - Respectă `shouldShowAds` (paid users = fără reclame) pe ambele tipuri.
 
-**Pre-cerințe**: (1) ≥100 useri/zi verificat; (2) consent gate / CMP live (AdSense + GDPR); (3) cont AdSense aprobat.
+**Pre-cerințe**: (1) ≥100 useri/zi verificat; (2) ✅ consent gate / CMP live (AdSense + GDPR) — DONE 2026-06-04 commit `64ac535`; (3) cont AdSense aprobat.
 
 ---
 
@@ -196,7 +196,7 @@ Backend-ul Advanced nu e doar fix de onestitate, e **venit**, pe două suprafeț
 
 **Măsurare**: `conversion_prompt_shown/_clicked/_dismissed` în `analytics_events` (event_type) → SuperAdmin analytics.
 
-**⚠️ Follow-up (separat, NU blochează)**: pageview-tracker-ul global din `layout.tsx` + GA fire fără consent gate (pre-existent, nu introdus de mine). Merită un fix ecosystem-wide pe același flag `cookieConsent.analytics`. De evaluat în item C (reconcile layout) sau sesiune dedicată — posibil intenționat ca first-party legitimate-interest, de aceea NU l-am atins silent.
+**✅ Follow-up consent gate — DONE 2026-06-04 (LIVE, commit `64ac535`)**: GA era deja gated (Google Consent Mode `analytics_storage:'denied'`→`granted`). Singurul ungated era **pageview-tracker-ul custom** din `layout.tsx` (POST `/api/analytics/track`) + scrierea `_4u_acq` (first-touch) în localStorage. Acum ambele rulează DOAR dacă `cookieConsent.analytics === true` (helper `analyticsOk()`, același flag ca ReturningVisitorPrompt). `CookieConsent.acceptAll()` dispatch-uiește event `4u:consent` → tracker-ul captează pageview-ul de landing (sărit înainte de consimțământ). Fără accept → zero pageview POST + zero attribution storage. Verificat live: `analyticsOk` 3× în HTML + `4u:consent` listener, pagini 200. **Trade-off (transparent)**: analytics-ul scade la userii care nu acceptă banner-ul — corect GDPR + necesar AdSense. **Pre-cerința #2 din Ads strategy (consent gate / CMP live) e acum bifată.**
 
 ---
 
