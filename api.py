@@ -7650,6 +7650,84 @@ def get_batch_processing_status(job_id: str):
     return response
 
 
+@app.post("/api/extract-region")
+async def extract_region(
+    file: UploadFile = File(...),
+    page: int = Form(...),
+    fx0: float = Form(...),
+    fy0: float = Form(...),
+    fx1: float = Form(...),
+    fy1: float = Form(...),
+    dpi: int = Form(300),
+    user: Dict[str, Any] = Depends(get_current_user_required)
+):
+    """Render a rectangular region of a PDF page to a high-DPI PNG (Pro).
+
+    The client sends the selection as normalised fractions of the page
+    (0..1, top-left origin) so we never depend on PDF-native coordinate
+    quirks. fitz page.rect is also top-left / y-down, so the mapping is
+    direct. This is the paid Advanced counterpart of the free, client-side
+    /tools/extract-figure tool. NOT related to the split-ocr handler.
+    """
+    limits = get_user_plan_limits(user)
+    if not limits.get("smart_tools"):
+        raise HTTPException(status_code=403, detail="High-DPI figure export requires a Pro plan")
+
+    dpi = max(72, min(int(dpi), 1200))
+    # Clamp to the page and normalise ordering (drag direction agnostic).
+    a0, a1 = sorted((max(0.0, min(fx0, 1.0)), max(0.0, min(fx1, 1.0))))
+    b0, b1 = sorted((max(0.0, min(fy0, 1.0)), max(0.0, min(fy1, 1.0))))
+    if (a1 - a0) < 0.001 or (b1 - b0) < 0.001:
+        raise HTTPException(status_code=400, detail="Selection is too small")
+
+    content = await file.read()
+    max_mb = limits.get("max_file_size_mb") or 100
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
+
+    try:
+        doc = fitz.open(stream=content, filetype="pdf")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not open this PDF")
+
+    try:
+        if doc.needs_pass:
+            raise HTTPException(status_code=400, detail="Password-protected PDFs are not supported")
+        if page < 1 or page > doc.page_count:
+            raise HTTPException(status_code=400, detail="Page out of range")
+        pg = doc[page - 1]
+        r = pg.rect
+        clip = fitz.Rect(
+            r.x0 + a0 * r.width,
+            r.y0 + b0 * r.height,
+            r.x0 + a1 * r.width,
+            r.y0 + b1 * r.height,
+        )
+        zoom = dpi / 72.0
+        # Guard against an enormous allocation (huge area at high DPI).
+        if (clip.width * zoom) * (clip.height * zoom) > 30_000_000:
+            raise HTTPException(
+                status_code=400,
+                detail="Region too large at this DPI — lower the DPI or select a smaller area",
+            )
+        # Offload the CPU-bound render off the event loop (mirrors how the
+        # batch tools use a thread pool) so a big high-DPI render doesn't
+        # stall other requests.
+        def _render():
+            pix = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
+            return pix.tobytes("png")
+
+        png = await asyncio.to_thread(_render)
+    finally:
+        doc.close()
+
+    return StreamingResponse(
+        io.BytesIO(png),
+        media_type="image/png",
+        headers={"Content-Disposition": 'attachment; filename="figure.png"'},
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     print("Starting 4uPDF API on http://localhost:3099")

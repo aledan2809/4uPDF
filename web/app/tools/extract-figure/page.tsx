@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import Link from "next/link";
 import ToolPageLayout from "../../components/ToolPageLayout";
 import FileUploadZone from "../../components/FileUploadZone";
+import { useAuth, shouldShowAds } from "../../lib/auth";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 // Lazy-load pdf.js only in the browser (it touches DOMMatrix/Worker, so it must
@@ -74,13 +76,18 @@ const howItWorks = [
 ];
 
 export default function ExtractFigurePage() {
+  const { user, getToken } = useAuth();
   const [fileName, setFileName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [numPages, setNumPages] = useState(0);
   const [pageNum, setPageNum] = useState(1);
   const [sel, setSel] = useState<Selection | null>(null);
+  const [dpi, setDpi] = useState(300);
+  const [hiExporting, setHiExporting] = useState(false);
+  const [upsell, setUpsell] = useState<string | null>(null);
 
+  const fileRef = useRef<File | null>(null);
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
   const loadingTaskRef = useRef<{ destroy: () => Promise<void> } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -168,6 +175,7 @@ export default function ExtractFigurePage() {
         loadingTaskRef.current = loadingTask;
         const doc = await loadingTask.promise;
         pdfDocRef.current = doc;
+        fileRef.current = file;
         setFileName(file.name);
         setNumPages(doc.numPages);
         setPageNum(1);
@@ -298,6 +306,70 @@ export default function ExtractFigurePage() {
     }, "image/png");
   }, [sel, fileName, pageNum]);
 
+  // Advanced (Pro): server-side high-DPI render of the same region. Sends the
+  // selection as page fractions (top-left origin) so the backend maps it onto
+  // fitz page.rect without coordinate-system guesswork.
+  const exportHighDpi = useCallback(async () => {
+    const canvas = canvasRef.current;
+    const file = fileRef.current;
+    if (!canvas || !file || !sel || sel.w < MIN_SELECTION_PX || sel.h < MIN_SELECTION_PX) return;
+    if (!user) {
+      setUpsell("Sign in with a Pro plan to export high-DPI images.");
+      return;
+    }
+    const cw = canvas.clientWidth || 1;
+    const ch = canvas.clientHeight || 1;
+    const clamp01 = (v: number) => Math.max(0, Math.min(v, 1));
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("page", String(pageNum));
+    form.append("fx0", String(clamp01(sel.x / cw)));
+    form.append("fy0", String(clamp01(sel.y / ch)));
+    form.append("fx1", String(clamp01((sel.x + sel.w) / cw)));
+    form.append("fy1", String(clamp01((sel.y + sel.h) / ch)));
+    form.append("dpi", String(dpi));
+
+    setUpsell(null);
+    setError(null);
+    setHiExporting(true);
+    try {
+      const token = getToken();
+      // Same-origin relative path: nginx routes /api/* to the Python backend.
+      const res = await fetch("/api/extract-region", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: form,
+      });
+      if (res.status === 401) {
+        setUpsell("Your session expired. Please sign in again.");
+        return;
+      }
+      if (res.status === 403) {
+        setUpsell("High-DPI export is a Pro feature — upgrade your plan to unlock it.");
+        return;
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.detail || "High-DPI export failed. Please try again.");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const base = (fileName || "figure").replace(/\.pdf$/i, "");
+      a.href = url;
+      a.download = `${base}-p${pageNum}-figure-${dpi}dpi.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "High-DPI export failed.");
+    } finally {
+      setHiExporting(false);
+    }
+  }, [sel, user, getToken, pageNum, dpi, fileName]);
+
   const reset = () => {
     try {
       renderTaskRef.current?.cancel();
@@ -306,6 +378,8 @@ export default function ExtractFigurePage() {
     }
     loadingTaskRef.current?.destroy().catch(() => {});
     loadingTaskRef.current = null;
+    fileRef.current = null;
+    setUpsell(null);
     pdfDocRef.current = null;
     setFileName(null);
     setNumPages(0);
@@ -315,6 +389,9 @@ export default function ExtractFigurePage() {
   };
 
   const hasSelection = !!sel && sel.w >= MIN_SELECTION_PX && sel.h >= MIN_SELECTION_PX;
+  // Paid tiers (any plan that suppresses ads) get the high-DPI controls; the
+  // server is still the source of truth and returns 403 if the tier lacks it.
+  const isPro = !!user && !shouldShowAds(user);
 
   return (
     <ToolPageLayout
@@ -425,11 +502,64 @@ export default function ExtractFigurePage() {
               </div>
             )}
 
-            {/* Honest note — high-DPI/batch/OCR are not built yet, so no upgrade
-                CTA is shown here (upgrading would unlock nothing for figures). */}
-            <p className="mt-6 text-sm text-gray-500">
-              Exported at screen resolution. Higher-DPI export is in development.
-            </p>
+            {/* High-DPI (Pro) — server-side render of the same region at 300-1200 DPI */}
+            <div className="mt-6 bg-gradient-to-r from-gray-900 to-gray-800 border border-gray-700 rounded-lg p-4">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <p className="text-sm font-medium text-white">
+                    High-DPI export <span className="text-yellow-400">Pro</span>
+                  </p>
+                  <p className="text-xs text-gray-400">
+                    The button above exports at screen resolution. Get a crisp 300–1200 DPI render — great for print or slides.
+                  </p>
+                </div>
+                {isPro ? (
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="hi-dpi" className="sr-only">Resolution</label>
+                    <select
+                      id="hi-dpi"
+                      value={dpi}
+                      onChange={(e) => setDpi(Number(e.target.value))}
+                      className="bg-gray-800 border border-gray-700 rounded-lg text-white text-sm px-3 py-2"
+                    >
+                      <option value={300}>300 DPI</option>
+                      <option value={600}>600 DPI</option>
+                      <option value={1200}>1200 DPI</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={exportHighDpi}
+                      disabled={!hasSelection || hiExporting}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
+                    >
+                      {hiExporting ? "Rendering…" : "Export high-DPI PNG"}
+                    </button>
+                  </div>
+                ) : user ? (
+                  <Link
+                    href="/pricing"
+                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    Upgrade to unlock
+                  </Link>
+                ) : (
+                  <Link
+                    href="/login"
+                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    Sign in for high-DPI
+                  </Link>
+                )}
+              </div>
+              {upsell && (
+                <div className="mt-3 flex items-center justify-between flex-wrap gap-2 text-sm">
+                  <span className="text-yellow-300">{upsell}</span>
+                  <Link href="/pricing" className="text-blue-400 hover:text-blue-300 whitespace-nowrap">
+                    View plans →
+                  </Link>
+                </div>
+              )}
+            </div>
           </>
         )}
       </div>
