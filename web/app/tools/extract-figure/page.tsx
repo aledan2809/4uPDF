@@ -84,6 +84,10 @@ export default function ExtractFigurePage() {
   const [pageNum, setPageNum] = useState(1);
   const [sel, setSel] = useState<Selection | null>(null);
   const [dpi, setDpi] = useState(300);
+  // Output options ("Extra"): raster format + transparent bg + auto-trim border.
+  const [fmt, setFmt] = useState<"png" | "tiff" | "svg">("png");
+  const [transparent, setTransparent] = useState(false);
+  const [trim, setTrim] = useState(false);
   const [hiExporting, setHiExporting] = useState(false);
   const [upsell, setUpsell] = useState<string | null>(null);
   // Batch (same region across a page range → ZIP) + OCR (text of the region).
@@ -361,7 +365,14 @@ export default function ExtractFigurePage() {
       return;
     }
     form.append("page", String(pageNum));
-    form.append("dpi", String(dpi));
+    // SVG is a vector export with its own endpoint (no dpi / raster options).
+    const isSvg = fmt === "svg";
+    if (!isSvg) {
+      form.append("dpi", String(dpi));
+      form.append("fmt", fmt);
+      form.append("transparent", String(transparent));
+      form.append("trim", String(trim));
+    }
 
     setUpsell(null);
     setError(null);
@@ -369,7 +380,7 @@ export default function ExtractFigurePage() {
     try {
       const token = getToken();
       // Same-origin relative path: nginx routes /api/* to the Python backend.
-      const res = await fetch("/api/extract-region", {
+      const res = await fetch(isSvg ? "/api/extract-region-svg" : "/api/extract-region", {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
@@ -387,13 +398,15 @@ export default function ExtractFigurePage() {
         throw new Error(data?.detail || "High-DPI export failed. Please try again.");
       }
       const base = (fileName || "figure").replace(/\.pdf$/i, "");
-      downloadBlob(await res.blob(), `${base}-p${pageNum}-figure-${dpi}dpi.png`);
+      const ext = isSvg ? "svg" : fmt === "tiff" ? "tiff" : "png";
+      const tag = isSvg ? "vector" : `${dpi}dpi`;
+      downloadBlob(await res.blob(), `${base}-p${pageNum}-figure-${tag}.${ext}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "High-DPI export failed.");
     } finally {
       setHiExporting(false);
     }
-  }, [buildRegionForm, user, getToken, pageNum, dpi, fileName]);
+  }, [buildRegionForm, user, getToken, pageNum, dpi, fmt, transparent, trim, fileName]);
 
   // Advanced (Pro): apply the same region to a page range → ZIP of PNGs.
   const exportBatch = useCallback(async () => {
@@ -408,9 +421,14 @@ export default function ExtractFigurePage() {
     const clampPage = (v: number) => (Number.isFinite(v) ? Math.max(1, Math.min(Math.round(v), numPages)) : 1);
     const from = batchAll ? 1 : clampPage(batchFrom);
     const to = batchAll ? numPages : Math.max(from, clampPage(batchTo));
+    // Batch is raster-only — SVG has no ZIP variant, so fall back to PNG.
+    const rasterFmt = fmt === "svg" ? "png" : fmt;
     form.append("dpi", String(dpi));
     form.append("page_from", String(from));
     form.append("page_to", String(to));
+    form.append("fmt", rasterFmt);
+    form.append("transparent", String(transparent));
+    form.append("trim", String(trim));
 
     setUpsell(null);
     setError(null);
@@ -435,13 +453,13 @@ export default function ExtractFigurePage() {
         throw new Error(data?.detail || "Batch extraction failed. Please try again.");
       }
       const base = (fileName || "figure").replace(/\.pdf$/i, "");
-      downloadBlob(await res.blob(), `${base}-figures-${dpi}dpi.zip`);
+      downloadBlob(await res.blob(), `${base}-figures-${dpi}dpi-${rasterFmt}.zip`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Batch extraction failed.");
     } finally {
       setBatchExporting(false);
     }
-  }, [buildRegionForm, user, getToken, batchAll, batchFrom, batchTo, numPages, dpi, fileName]);
+  }, [buildRegionForm, user, getToken, batchAll, batchFrom, batchTo, numPages, dpi, fmt, transparent, trim, fileName]);
 
   // Advanced (Pro): OCR the selected region → recognised text.
   const runOcr = useCallback(async () => {
@@ -642,29 +660,44 @@ export default function ExtractFigurePage() {
                     High-DPI export <span className="text-yellow-400">Pro</span>
                   </p>
                   <p className="text-xs text-gray-400">
-                    The button above exports at screen resolution. Get a crisp 300–1200 DPI render — great for print or slides.
+                    The button above exports at screen resolution. Get a crisp 300–1200 DPI render — or a true vector SVG, with optional transparent background and auto-trim.
                   </p>
                 </div>
                 {isPro ? (
-                  <div className="flex items-center gap-2">
-                    <label htmlFor="hi-dpi" className="sr-only">Resolution</label>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <label htmlFor="fig-fmt" className="sr-only">Format</label>
                     <select
-                      id="hi-dpi"
-                      value={dpi}
-                      onChange={(e) => setDpi(Number(e.target.value))}
+                      id="fig-fmt"
+                      value={fmt}
+                      onChange={(e) => setFmt(e.target.value as "png" | "tiff" | "svg")}
                       className="bg-gray-800 border border-gray-700 rounded-lg text-white text-sm px-3 py-2"
                     >
-                      <option value={300}>300 DPI</option>
-                      <option value={600}>600 DPI</option>
-                      <option value={1200}>1200 DPI</option>
+                      <option value="png">PNG</option>
+                      <option value="tiff">TIFF</option>
+                      <option value="svg">SVG (vector)</option>
                     </select>
+                    {fmt !== "svg" && (
+                      <>
+                        <label htmlFor="hi-dpi" className="sr-only">Resolution</label>
+                        <select
+                          id="hi-dpi"
+                          value={dpi}
+                          onChange={(e) => setDpi(Number(e.target.value))}
+                          className="bg-gray-800 border border-gray-700 rounded-lg text-white text-sm px-3 py-2"
+                        >
+                          <option value={300}>300 DPI</option>
+                          <option value={600}>600 DPI</option>
+                          <option value={1200}>1200 DPI</option>
+                        </select>
+                      </>
+                    )}
                     <button
                       type="button"
                       onClick={exportHighDpi}
                       disabled={!hasSelection || hiExporting}
                       className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
                     >
-                      {hiExporting ? "Rendering…" : "Export high-DPI PNG"}
+                      {hiExporting ? "Rendering…" : fmt === "svg" ? "Export SVG (vector)" : `Export ${fmt.toUpperCase()}`}
                     </button>
                   </div>
                 ) : user ? (
@@ -684,6 +717,30 @@ export default function ExtractFigurePage() {
                 )}
               </div>
 
+              {/* Output options (Pro): transparent background + auto-trim — raster only */}
+              {isPro && fmt !== "svg" && (
+                <div className="mt-3 flex items-center gap-4 flex-wrap">
+                  <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={transparent}
+                      onChange={(e) => setTransparent(e.target.checked)}
+                      className="accent-blue-600"
+                    />
+                    Transparent background
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={trim}
+                      onChange={(e) => setTrim(e.target.checked)}
+                      className="accent-blue-600"
+                    />
+                    Auto-trim margins
+                  </label>
+                </div>
+              )}
+
               {/* Batch + OCR — available to Pro tiers; the server re-checks the plan */}
               {isPro && (
                 <div className="mt-4 pt-4 border-t border-gray-700 space-y-4">
@@ -692,7 +749,7 @@ export default function ExtractFigurePage() {
                     <div>
                       <p className="text-sm font-medium text-white">Batch — same region across pages</p>
                       <p className="text-xs text-gray-400">
-                        Apply this exact selection to a page range and download a ZIP of PNGs (at the DPI above).
+                        Apply this exact selection to a page range and download a ZIP of images (at the DPI/format above; SVG falls back to PNG for batch).
                       </p>
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">

@@ -7736,8 +7736,48 @@ def _open_region_pdf(content: bytes) -> "fitz.Document":
 # --- Shared region-render cores (one implementation, called by both the
 # --- web JWT routes and the public /api/v1 key-authed routes — no drift).
 
-async def _do_extract_region(content, page, fx0, fy0, fx1, fy1, dpi) -> bytes:
+# Region "Extra" output options: raster format + transparent background + auto-trim.
+REGION_RASTER = {"png": ("image/png", "png"), "tiff": ("image/tiff", "tiff")}
+
+
+def _region_fmt(fmt: str) -> str:
+    """Normalise the raster format request → 'png' | 'tiff' (SVG has its own
+    endpoint). Anything else is a 400."""
+    f = (fmt or "png").strip().lower()
+    if f in ("tif", "tiff"):
+        return "tiff"
+    if f == "png":
+        return "png"
+    raise HTTPException(status_code=400, detail="Unsupported format — use png or tiff (SVG has its own endpoint)")
+
+
+def _region_image_bytes(pix: "fitz.Pixmap", fmt: str, transparent: bool, trim: bool) -> bytes:
+    """Encode a rendered region pixmap as PNG or TIFF, optionally auto-trimming a
+    uniform border. Transparency is produced at render time (alpha pixmap); the
+    plain-PNG-no-trim case keeps the original fast `pix.tobytes` path untouched."""
+    if fmt == "png" and not trim:
+        return pix.tobytes("png")
+    from PIL import Image, ImageChops
+    img = Image.frombytes("RGBA" if pix.alpha else "RGB", (pix.width, pix.height), pix.samples)
+    if trim:
+        if img.mode == "RGBA":
+            bbox = img.getbbox()  # drops fully-transparent border
+        else:
+            bg = Image.new(img.mode, img.size, img.getpixel((0, 0)))
+            bbox = ImageChops.difference(img, bg).getbbox()
+        if bbox:
+            img = img.crop(bbox)
+    out = io.BytesIO()
+    if fmt == "tiff":
+        img.save(out, format="TIFF", compression="tiff_deflate")
+    else:
+        img.save(out, format="PNG")
+    return out.getvalue()
+
+
+async def _do_extract_region(content, page, fx0, fy0, fx1, fy1, dpi, fmt="png", transparent=False, trim=False) -> bytes:
     dpi = max(72, min(int(dpi), 1200))
+    fmt = _region_fmt(fmt)
     doc = _open_region_pdf(content)
     try:
         if page < 1 or page > doc.page_count:
@@ -7748,15 +7788,18 @@ async def _do_extract_region(content, page, fx0, fy0, fx1, fy1, dpi) -> bytes:
         _guard_region_pixels(clip, zoom)
 
         def _render():
-            return pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip).tobytes("png")
+            pix = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip, alpha=transparent)
+            return _region_image_bytes(pix, fmt, transparent, trim)
 
         return await asyncio.to_thread(_render)
     finally:
         doc.close()
 
 
-async def _do_extract_region_batch(content, fx0, fy0, fx1, fy1, dpi, page_from, page_to) -> "io.BytesIO":
+async def _do_extract_region_batch(content, fx0, fy0, fx1, fy1, dpi, page_from, page_to, fmt="png", transparent=False, trim=False) -> "io.BytesIO":
     dpi = max(72, min(int(dpi), 1200))
+    fmt = _region_fmt(fmt)
+    ext = REGION_RASTER[fmt][1]
     doc = _open_region_pdf(content)
     try:
         total = doc.page_count
@@ -7780,18 +7823,52 @@ async def _do_extract_region_batch(content, fx0, fy0, fx1, fy1, dpi, page_from, 
                     pg = doc[n - 1]
                     clip = _region_clip(pg, fx0, fy0, fx1, fy1)
                     _guard_region_pixels(clip, zoom)
-                    png = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip).tobytes("png")
-                    total_bytes += len(png)
+                    pix = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip, alpha=transparent)
+                    data = _region_image_bytes(pix, fmt, transparent, trim)
+                    total_bytes += len(data)
                     if total_bytes > MAX_REGION_BATCH_BYTES:
                         raise HTTPException(
                             status_code=400,
                             detail="Batch output is too large — narrow the page range or lower the DPI",
                         )
-                    zf.writestr(f"figure-p{n}-{dpi}dpi.png", png)
+                    zf.writestr(f"figure-p{n}-{dpi}dpi.{ext}", data)
             buf.seek(0)
             return buf
 
         return await asyncio.to_thread(_render_zip)
+    finally:
+        doc.close()
+
+
+async def _do_extract_region_svg(content, page, fx0, fy0, fx1, fy1) -> bytes:
+    """Export the selected region as a true vector SVG (text + vector art stay
+    scalable — the real win over a raster snip). Renders the full page to SVG via
+    fitz, then crops the root viewBox to the selection rectangle."""
+    doc = _open_region_pdf(content)
+    try:
+        if page < 1 or page > doc.page_count:
+            raise HTTPException(status_code=400, detail="Page out of range")
+        pg = doc[page - 1]
+        clip = _region_clip(pg, fx0, fy0, fx1, fy1)
+
+        def _svg():
+            full = pg.get_svg_image()  # page coordinate space, in points
+            x0, y0, w, h = clip.x0, clip.y0, clip.width, clip.height
+            view = f'viewBox="{x0:.2f} {y0:.2f} {w:.2f} {h:.2f}"'
+
+            def _fix(m):
+                tag = m.group(0)
+                tag = re.sub(r'width="[^"]*"', f'width="{w:.2f}pt"', tag, count=1)
+                tag = re.sub(r'height="[^"]*"', f'height="{h:.2f}pt"', tag, count=1)
+                if "viewBox=" in tag:
+                    tag = re.sub(r'viewBox="[^"]*"', view, tag, count=1)
+                else:
+                    tag = tag[:-1] + " " + view + ">"
+                return tag
+
+            return re.sub(r"<svg\b[^>]*>", _fix, full, count=1).encode("utf-8")
+
+        return await asyncio.to_thread(_svg)
     finally:
         doc.close()
 
@@ -7886,9 +7963,13 @@ async def extract_region(
     fx1: float = Form(...),
     fy1: float = Form(...),
     dpi: int = Form(300),
+    fmt: str = Form("png"),
+    transparent: bool = Form(False),
+    trim: bool = Form(False),
     user: Dict[str, Any] = Depends(get_current_user_required)
 ):
-    """Render a rectangular region of a PDF page to a high-DPI PNG (Pro, web).
+    """Render a rectangular region of a PDF page to a high-DPI image (Pro, web).
+    Supports PNG/TIFF, a transparent background and auto-trim of a uniform border.
 
     Paid Advanced counterpart of the free, client-side /tools/extract-figure
     tool. NOT related to the split-ocr handler. (See /api/v1/extract-region for
@@ -7901,11 +7982,40 @@ async def extract_region(
     max_mb = limits.get("max_file_size_mb") or 100
     if len(content) > max_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
-    png = await _do_extract_region(content, page, fx0, fy0, fx1, fy1, dpi)
+    out_fmt = _region_fmt(fmt)
+    mime, ext = REGION_RASTER[out_fmt]
+    data = await _do_extract_region(content, page, fx0, fy0, fx1, fy1, dpi, out_fmt, transparent, trim)
     return StreamingResponse(
-        io.BytesIO(png),
-        media_type="image/png",
-        headers={"Content-Disposition": 'attachment; filename="figure.png"'},
+        io.BytesIO(data),
+        media_type=mime,
+        headers={"Content-Disposition": f'attachment; filename="figure.{ext}"'},
+    )
+
+
+@app.post("/api/extract-region-svg")
+async def extract_region_svg(
+    file: UploadFile = File(...),
+    page: int = Form(...),
+    fx0: float = Form(...),
+    fy0: float = Form(...),
+    fx1: float = Form(...),
+    fy1: float = Form(...),
+    user: Dict[str, Any] = Depends(get_current_user_required),
+):
+    """Export the selected region as a scalable vector SVG (Pro). Vector art and
+    text stay crisp at any size. Same coordinates as /api/extract-region."""
+    limits = get_user_plan_limits(user)
+    if not limits.get("smart_tools"):
+        raise HTTPException(status_code=403, detail="SVG figure export requires a Pro plan")
+    content = await file.read()
+    max_mb = limits.get("max_file_size_mb") or 100
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
+    svg = await _do_extract_region_svg(content, page, fx0, fy0, fx1, fy1)
+    return StreamingResponse(
+        io.BytesIO(svg),
+        media_type="image/svg+xml",
+        headers={"Content-Disposition": 'attachment; filename="figure.svg"'},
     )
 
 
@@ -7919,12 +8029,15 @@ async def extract_region_batch(
     dpi: int = Form(300),
     page_from: int = Form(1),
     page_to: int = Form(0),  # 0 => through the last page
+    fmt: str = Form("png"),
+    transparent: bool = Form(False),
+    trim: bool = Form(False),
     user: Dict[str, Any] = Depends(get_current_user_required),
 ):
-    """Render the SAME region across a page range to high-DPI PNGs, returned as
-    a ZIP (Pro). Same engine + coordinates as /api/extract-region; the selection
-    is applied to every page in [page_from, page_to]. Useful for snipping the
-    same chart/figure off every page of a report. NOT split-ocr.
+    """Render the SAME region across a page range to high-DPI images, returned as
+    a ZIP (Pro). Same engine + coordinates + format options (PNG/TIFF, transparent,
+    auto-trim) as /api/extract-region; the selection is applied to every page in
+    [page_from, page_to]. Useful for snipping the same chart off every page. NOT split-ocr.
     """
     limits = get_user_plan_limits(user)
     if not limits.get("smart_tools"):
@@ -7933,7 +8046,7 @@ async def extract_region_batch(
     max_mb = limits.get("max_file_size_mb") or 100
     if len(content) > max_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
-    buf = await _do_extract_region_batch(content, fx0, fy0, fx1, fy1, dpi, page_from, page_to)
+    buf = await _do_extract_region_batch(content, fx0, fy0, fx1, fy1, dpi, page_from, page_to, fmt, transparent, trim)
     return StreamingResponse(
         buf,
         media_type="application/zip",
@@ -7982,18 +8095,47 @@ async def api_v1_extract_region(
     fx1: float = Form(...),
     fy1: float = Form(...),
     dpi: int = Form(300),
+    fmt: str = Form("png"),
+    transparent: bool = Form(False),
+    trim: bool = Form(False),
     consumer: Dict[str, Any] = Depends(get_api_consumer),
 ):
-    """Public PDF API: render a page region to a high-DPI PNG. Auth: X-API-Key."""
+    """Public PDF API: render a page region to a high-DPI image (PNG/TIFF,
+    optional transparent background + auto-trim). Auth: X-API-Key."""
     content = await file.read()
     max_mb = get_user_plan_limits(consumer).get("max_file_size_mb") or 100
     if len(content) > max_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
-    png = await _do_extract_region(content, page, fx0, fy0, fx1, fy1, dpi)
+    out_fmt = _region_fmt(fmt)
+    mime, ext = REGION_RASTER[out_fmt]
+    data = await _do_extract_region(content, page, fx0, fy0, fx1, fy1, dpi, out_fmt, transparent, trim)
     return StreamingResponse(
-        io.BytesIO(png),
-        media_type="image/png",
-        headers={"Content-Disposition": 'attachment; filename="figure.png"'},
+        io.BytesIO(data),
+        media_type=mime,
+        headers={"Content-Disposition": f'attachment; filename="figure.{ext}"'},
+    )
+
+
+@app.post("/api/v1/extract-region-svg")
+async def api_v1_extract_region_svg(
+    file: UploadFile = File(...),
+    page: int = Form(...),
+    fx0: float = Form(...),
+    fy0: float = Form(...),
+    fx1: float = Form(...),
+    fy1: float = Form(...),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: export a page region as a scalable vector SVG. Auth: X-API-Key."""
+    content = await file.read()
+    max_mb = get_user_plan_limits(consumer).get("max_file_size_mb") or 100
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
+    svg = await _do_extract_region_svg(content, page, fx0, fy0, fx1, fy1)
+    return StreamingResponse(
+        io.BytesIO(svg),
+        media_type="image/svg+xml",
+        headers={"Content-Disposition": 'attachment; filename="figure.svg"'},
     )
 
 
@@ -8007,14 +8149,18 @@ async def api_v1_extract_region_batch(
     dpi: int = Form(300),
     page_from: int = Form(1),
     page_to: int = Form(0),
+    fmt: str = Form("png"),
+    transparent: bool = Form(False),
+    trim: bool = Form(False),
     consumer: Dict[str, Any] = Depends(get_api_consumer),
 ):
-    """Public PDF API: same region across a page range → ZIP. Auth: X-API-Key."""
+    """Public PDF API: same region across a page range → ZIP (PNG/TIFF, optional
+    transparent background + auto-trim). Auth: X-API-Key."""
     content = await file.read()
     max_mb = get_user_plan_limits(consumer).get("max_file_size_mb") or 100
     if len(content) > max_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
-    buf = await _do_extract_region_batch(content, fx0, fy0, fx1, fy1, dpi, page_from, page_to)
+    buf = await _do_extract_region_batch(content, fx0, fy0, fx1, fy1, dpi, page_from, page_to, fmt, transparent, trim)
     return StreamingResponse(
         buf,
         media_type="application/zip",

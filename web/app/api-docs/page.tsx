@@ -82,7 +82,20 @@ export default function ApiDocsPage() {
   -F "fx0=0.1" -F "fy0=0.3" -F "fx1=0.7" -F "fy1=0.4" \\
   -F "dpi=600" \\
   -o figure.png`}</Code>
-                  <p className="text-gray-500 text-xs mt-2">Fields: <code>file</code> (PDF), <code>page</code> (1-based), <code>fx0/fy0/fx1/fy1</code>, <code>dpi</code> (72–1200, default 300).</p>
+                  <p className="text-gray-500 text-xs mt-2">Fields: <code>file</code> (PDF), <code>page</code> (1-based), <code>fx0/fy0/fx1/fy1</code>, <code>dpi</code> (72–1200, default 300), <code>fmt</code> (<code>png</code>|<code>tiff</code>, default png), <code>transparent</code> (bool), <code>trim</code> (bool, auto-trim a uniform border).</p>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    <span className="text-green-400">POST</span> /api/v1/extract-region-svg
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-3">Export a page region as a scalable vector <code className="px-1 bg-gray-800 rounded">image/svg+xml</code> — text and vector art stay crisp at any size.</p>
+                  <Code>{`curl -X POST ${BASE}/api/v1/extract-region-svg \\
+  -H "X-API-Key: $KEY" \\
+  -F "file=@report.pdf" \\
+  -F "page=1" \\
+  -F "fx0=0.1" -F "fy0=0.3" -F "fx1=0.7" -F "fy1=0.4" \\
+  -o figure.svg`}</Code>
                 </div>
 
                 <div>
@@ -97,7 +110,7 @@ export default function ApiDocsPage() {
   -F "dpi=300" \\
   -F "page_from=1" -F "page_to=0" \\
   -o figures.zip`}</Code>
-                  <p className="text-gray-500 text-xs mt-2"><code>page_to=0</code> means &quot;through the last page&quot;. Up to 200 pages per request.</p>
+                  <p className="text-gray-500 text-xs mt-2"><code>page_to=0</code> means &quot;through the last page&quot;. Up to 200 pages per request. Also accepts <code>fmt</code> (png|tiff), <code>transparent</code>, <code>trim</code>.</p>
                 </div>
 
                 <div>
