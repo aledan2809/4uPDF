@@ -28,9 +28,9 @@ export default function ApiDocsPage() {
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
           <h1 className="text-4xl font-bold text-white mb-4">PDF API</h1>
           <p className="text-gray-300 text-lg mb-10">
-            Call 4uPDF&apos;s PDF engine from your own apps. The first endpoints expose the high-DPI
-            figure-extraction family — render any region of a PDF page to a crisp PNG, batch it across
-            pages, or OCR the region — over a simple HTTP API. More tools will follow.
+            Call 4uPDF&apos;s PDF engine from your own apps over a simple HTTP API: high-DPI figure
+            extraction (region → PNG, batch, OCR) plus core operations — merge, split, compress and
+            PDF-to-JPG. More tools (Word/Excel/PowerPoint conversion, OCR text layer) are on the way.
           </p>
 
           <div className="space-y-10">
@@ -113,6 +113,57 @@ export default function ApiDocsPage() {
 
 # => { "text": "Figure 1: ...", "lines": ["Figure 1: ...", ...] }`}</Code>
                   <p className="text-gray-500 text-xs mt-2">OCR DPI is clamped to 150–600 (accuracy plateaus above that).</p>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    <span className="text-green-400">POST</span> /api/v1/merge
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-3">Merge 2+ PDFs into one. Returns <code className="px-1 bg-gray-800 rounded">application/pdf</code>.</p>
+                  <Code>{`curl -X POST ${BASE}/api/v1/merge \\
+  -H "X-API-Key: $KEY" \\
+  -F "files=@a.pdf" -F "files=@b.pdf" \\
+  -o merged.pdf`}</Code>
+                  <p className="text-gray-500 text-xs mt-2">Up to 50 files; combined size follows your plan&apos;s limit.</p>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    <span className="text-green-400">POST</span> /api/v1/split
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-3">Split a PDF by page ranges. Returns a <code className="px-1 bg-gray-800 rounded">application/zip</code> of PDFs.</p>
+                  <Code>{`curl -X POST ${BASE}/api/v1/split \\
+  -H "X-API-Key: $KEY" \\
+  -F "file=@doc.pdf" \\
+  -F "ranges=1-3,4,5-7" \\
+  -o split.zip`}</Code>
+                  <p className="text-gray-500 text-xs mt-2"><code>ranges=all</code> (default) splits into single pages. Each comma part becomes one output PDF.</p>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    <span className="text-green-400">POST</span> /api/v1/compress
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-3">Compress a PDF. Returns <code className="px-1 bg-gray-800 rounded">application/pdf</code>.</p>
+                  <Code>{`curl -X POST ${BASE}/api/v1/compress \\
+  -H "X-API-Key: $KEY" \\
+  -F "file=@doc.pdf" \\
+  -F "quality=medium" \\
+  -o compressed.pdf`}</Code>
+                  <p className="text-gray-500 text-xs mt-2"><code>quality</code> = <code>low</code> | <code>medium</code> | <code>high</code> (default medium).</p>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    <span className="text-green-400">POST</span> /api/v1/pdf-to-jpg
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-3">Render PDF pages to JPGs. Returns a <code className="px-1 bg-gray-800 rounded">application/zip</code> of images.</p>
+                  <Code>{`curl -X POST ${BASE}/api/v1/pdf-to-jpg \\
+  -H "X-API-Key: $KEY" \\
+  -F "file=@doc.pdf" \\
+  -F "dpi=150" -F "pages=all" \\
+  -o images.zip`}</Code>
+                  <p className="text-gray-500 text-xs mt-2"><code>dpi</code> 36–300 (default 150), <code>pages</code> = <code>all</code> or e.g. <code>1,3,5-7</code>.</p>
                 </div>
               </div>
             </section>

@@ -8042,6 +8042,203 @@ async def api_v1_extract_region_ocr(
     return JSONResponse({"text": "\n".join(lines), "lines": lines})
 
 
+# --- Phase 2 surface: core PDF ops as direct-binary, in-memory cores ----------
+# Purpose-built for the API (synchronous, stream the result back) rather than
+# the web app's async job + download-URL pattern. Same fitz engine.
+
+def _parse_page_list(spec: str, total: int) -> list:
+    """'all'/empty or '1,3,5-7' (1-based) → sorted unique 0-based indices."""
+    spec = (spec or "all").strip().lower()
+    if spec in ("", "all"):
+        return list(range(total))
+    out = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            out.extend(range(int(a) - 1, int(b)))
+        else:
+            out.append(int(part) - 1)
+    out = sorted({p for p in out if 0 <= p < total})
+    if not out:
+        raise HTTPException(status_code=400, detail="No valid pages in selection")
+    return out
+
+
+def _parse_page_groups(spec: str, total: int) -> list:
+    """Return [(label, [0-based pages]), ...] for split. 'all'/empty → one
+    group per page; otherwise one group per comma part (range or single)."""
+    spec = (spec or "").strip().lower()
+    if spec in ("", "all"):
+        return [(f"p{p + 1}", [p]) for p in range(total)]
+    groups = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            pages = [p for p in range(int(a) - 1, int(b)) if 0 <= p < total]
+            label = f"p{int(a)}-{int(b)}"
+        else:
+            p = int(part) - 1
+            pages = [p] if 0 <= p < total else []
+            label = f"p{part}"
+        if pages:
+            groups.append((label, pages))
+    if not groups:
+        raise HTTPException(status_code=400, detail="No valid page ranges in selection")
+    return groups
+
+
+def _merge_pdfs_bytes(streams: list) -> bytes:
+    merged = fitz.open()
+    try:
+        for s in streams:
+            d = fitz.open(stream=s, filetype="pdf")
+            try:
+                if d.needs_pass:
+                    raise HTTPException(status_code=400, detail="Password-protected PDFs are not supported")
+                merged.insert_pdf(d)
+            finally:
+                d.close()
+        return merged.tobytes(garbage=3, deflate=True)
+    finally:
+        merged.close()
+
+
+def _compress_pdf_bytes(content: bytes, quality: str) -> bytes:
+    garbage = {"low": 1, "medium": 3, "high": 4}.get((quality or "medium").lower(), 3)
+    doc = _open_region_pdf(content)
+    try:
+        return doc.tobytes(garbage=garbage, deflate=True, clean=True, deflate_images=True, deflate_fonts=True)
+    finally:
+        doc.close()
+
+
+def _split_pdf_zip(content: bytes, ranges: str) -> "io.BytesIO":
+    doc = _open_region_pdf(content)
+    try:
+        groups = _parse_page_groups(ranges, doc.page_count)
+        if len(groups) > MAX_REGION_BATCH_PAGES:
+            raise HTTPException(status_code=400, detail=f"Split is limited to {MAX_REGION_BATCH_PAGES} output files — narrow the ranges")
+        buf = io.BytesIO()
+        total_bytes = 0
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for label, pages in groups:
+                out = fitz.open()
+                for p in pages:
+                    out.insert_pdf(doc, from_page=p, to_page=p)
+                data = out.tobytes(garbage=3, deflate=True)
+                out.close()
+                total_bytes += len(data)
+                if total_bytes > MAX_REGION_BATCH_BYTES:
+                    raise HTTPException(status_code=400, detail="Output is too large — narrow the ranges")
+                zf.writestr(f"{label}.pdf", data)
+        buf.seek(0)
+        return buf
+    finally:
+        doc.close()
+
+
+def _pdf_to_jpg_zip(content: bytes, dpi: int, pages: str) -> "io.BytesIO":
+    dpi = max(36, min(int(dpi), 300))  # full-page raster — bound memory
+    doc = _open_region_pdf(content)
+    try:
+        page_list = _parse_page_list(pages, doc.page_count)
+        if len(page_list) > MAX_REGION_BATCH_PAGES:
+            raise HTTPException(status_code=400, detail=f"Limited to {MAX_REGION_BATCH_PAGES} pages per request")
+        zoom = dpi / 72.0
+        buf = io.BytesIO()
+        total_bytes = 0
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in page_list:
+                jpg = doc[p].get_pixmap(matrix=fitz.Matrix(zoom, zoom)).tobytes("jpeg")
+                total_bytes += len(jpg)
+                if total_bytes > MAX_REGION_BATCH_BYTES:
+                    raise HTTPException(status_code=400, detail="Output is too large — fewer pages or lower DPI")
+                zf.writestr(f"page-{p + 1}.jpg", jpg)
+        buf.seek(0)
+        return buf
+    finally:
+        doc.close()
+
+
+@app.post("/api/v1/merge")
+async def api_v1_merge(
+    files: List[UploadFile] = File(...),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: merge 2+ PDFs into one. Returns application/pdf."""
+    if len(files) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 PDF files are required")
+    if len(files) > 50:
+        raise HTTPException(status_code=400, detail="At most 50 files per merge request")
+    max_bytes = (get_user_plan_limits(consumer).get("max_file_size_mb") or 100) * 1024 * 1024
+    streams, total = [], 0
+    for f in files:
+        data = await f.read()
+        total += len(data)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail="Combined upload exceeds your plan's size limit")
+        streams.append(data)
+    pdf = await asyncio.to_thread(_merge_pdfs_bytes, streams)
+    return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="merged.pdf"'})
+
+
+@app.post("/api/v1/split")
+async def api_v1_split(
+    file: UploadFile = File(...),
+    ranges: str = Form("all"),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: split a PDF by page ranges (e.g. '1-3,4,5-7'); 'all'
+    splits into single pages. Returns a ZIP of PDFs."""
+    content = await file.read()
+    max_mb = get_user_plan_limits(consumer).get("max_file_size_mb") or 100
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
+    buf = await asyncio.to_thread(_split_pdf_zip, content, ranges)
+    return StreamingResponse(buf, media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="split.zip"'})
+
+
+@app.post("/api/v1/compress")
+async def api_v1_compress(
+    file: UploadFile = File(...),
+    quality: str = Form("medium"),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: compress a PDF (quality low|medium|high). Returns application/pdf."""
+    content = await file.read()
+    max_mb = get_user_plan_limits(consumer).get("max_file_size_mb") or 100
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
+    pdf = await asyncio.to_thread(_compress_pdf_bytes, content, quality)
+    return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="compressed.pdf"'})
+
+
+@app.post("/api/v1/pdf-to-jpg")
+async def api_v1_pdf_to_jpg(
+    file: UploadFile = File(...),
+    dpi: int = Form(150),
+    pages: str = Form("all"),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: render PDF pages to JPGs. Returns a ZIP of images."""
+    content = await file.read()
+    max_mb = get_user_plan_limits(consumer).get("max_file_size_mb") or 100
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
+    buf = await asyncio.to_thread(_pdf_to_jpg_zip, content, dpi, pages)
+    return StreamingResponse(buf, media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="images.zip"'})
+
+
 @app.post("/api/api-keys")
 async def create_api_key(
     name: str = Form(""),
