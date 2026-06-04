@@ -100,6 +100,24 @@ Backend-ul Advanced nu e doar fix de onestitate, e **venit**, pe două suprafeț
 
 ---
 
+## [~] 💼 B2B "PDF API" — produs vandabil (api_access tier) — Phase 1 DONE 2026-06-04 (LIVE, commit `fe83452`)
+
+**Scop**: vinde motorul 4uPDF ca API metered către dezvoltatori externi (lane separat de freemium-ul B2C). Decizii (confirmate cu user 2026-06-04): namespace nou `/api/v1/*` (separat de rutele web) · billing = **abonament gold preplătit + cotă lunară inclusă + plafon dur (429), fără overage** (zero risc de datorie; best practice pentru self-serve) · Phase 1 = doar verticalul flagship, complet end-to-end.
+
+**Phase 1 — DONE 2026-06-04 (LIVE pe 4updf.com, commit `fe83452`)**:
+- Tabel `api_keys` (cheie stocată sha256-hash, prefix `pdf_live_…` afișat o singură dată; metering lunar pe rând: `period_ym` + `period_calls`, increment atomic + roll lunar). `api_calls_per_month` în PLAN_LIMITS (free/bronze/silver=0, gold=10000, custom=-1).
+- Auth `X-API-Key` (`get_api_consumer`): validează cheia, încarcă owner-ul, enforce `api_access` + cotă lunară (plafon dur → 429), metering. Refuză cheie revocată / owner banat / plan fără api_access.
+- Endpoint-uri publice key-authed: `POST /api/v1/extract-region` (+ `-batch` + `-ocr`) — același motor ca web (cores partajate `_do_extract_region*`, fără drift; rutele web JWT refactorizate peste ele).
+- Key management JWT-authed: `POST/GET/DELETE /api/api-keys` (ownership-checked, fără IDOR; cheia full întoarsă o singură dată).
+- UI: panou "API Keys" în dashboard (self-gating pe `api_access`, upsell altfel; create cu Copy+Done, listă cu usage lunar vs cotă, revoke) + pagină publică `/api-docs` (auth, coordonate, 3 endpoint-uri + curl, limite/erori) + link footer.
+- **Prefix `pdf_live_`** (NU `sk_live_` — colida cu Stripe + declanșa GitHub secret-scanning; namespace propriu = best practice).
+- **Verificat live** (cont e2e ridicat temporar la gold+active, **revertat garantat la free**): /api-docs 200 · anon/invalid key 401 · free create-key 403 · gold create→`pdf_live_…` · list `api_access=True quota=10000` · key→200 PNG + 200 OCR (text corect) · revoke→200 apoi cheie revocată→401. split-ocr (NO-TOUCH) + vecini 200, fără regresie.
+
+**Phase 2 — pending**: extinde suprafața `/api/v1/*` (merge/split/compress/convert/ocr-layer).
+**Phase 3 — pending**: billing pe consum (Stripe metered) SAU credite preplătite (top-up) + rate-limit per-cheie + grafice usage în dashboard.
+
+---
+
 ## [x] 🔧 nginx /api migration — deploy Next /api routes (AI + newsletter) — DONE 2026-06-03 (LIVE, commit `8b281f3`)
 
 **Context**: deferat din item C (handoff Master). Cele 3 rute Next NEdeployate (`/api/ai`, `/api/newsletter`, `[...path]` catch-all) erau pe `unify-2026-06`; comitul `f0003d3 deploy-safe` le scosese intenționat ca să livreze CAS fără schimbare nginx.
