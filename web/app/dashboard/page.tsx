@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
+import ApiKeysPanel from "../components/ApiKeysPanel";
 import { useAuth, getUsageStatus, PlanLimits } from "../lib/auth";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3099";
@@ -355,6 +356,9 @@ export default function DashboardPage() {
               </div>
             </div>
           )}
+
+          {/* API Keys (B2B PDF API — self-gates on plan api_access) */}
+          <ApiKeysPanel />
 
           {/* Voucher Redemption */}
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-8">

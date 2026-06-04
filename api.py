@@ -217,6 +217,27 @@ def init_database():
             )
         """)
 
+        # API keys for the B2B "PDF API" product (Phase 1). Keys are stored
+        # hashed (sha256); only the prefix is kept for display. Monthly usage
+        # is metered on the row itself (period_ym + period_calls) so quota
+        # enforcement is a single indexed lookup, no table scan.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT,
+                key_prefix TEXT NOT NULL,
+                key_hash TEXT UNIQUE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_used_at TIMESTAMP,
+                revoked INTEGER DEFAULT 0,
+                calls_total INTEGER DEFAULT 0,
+                period_ym TEXT,
+                period_calls INTEGER DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
         # Analytics events table for local analytics tracking
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS analytics_events (
@@ -298,6 +319,8 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_vouchers_code ON vouchers(code)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_history(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_usage_anon ON usage_history(anonymous_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_timestamp ON analytics_events(timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_event_type ON analytics_events(event_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_analytics_page ON analytics_events(page)")
@@ -348,6 +371,7 @@ PLAN_LIMITS = {
         "batch_processing": False,
         "smart_tools": False,
         "api_access": False,
+        "api_calls_per_month": 0,
         "price_monthly_eur": 0,
         "price_annual_eur": 0,
     },
@@ -358,6 +382,7 @@ PLAN_LIMITS = {
         "batch_processing": True,
         "smart_tools": False,
         "api_access": False,
+        "api_calls_per_month": 0,
         "price_monthly_eur": 3.99,
         "price_annual_eur": 38.30,  # ~20% discount
     },
@@ -368,6 +393,7 @@ PLAN_LIMITS = {
         "batch_processing": True,
         "smart_tools": True,
         "api_access": False,
+        "api_calls_per_month": 0,
         "price_monthly_eur": 7.99,
         "price_annual_eur": 76.70,  # ~20% discount
     },
@@ -378,6 +404,7 @@ PLAN_LIMITS = {
         "batch_processing": True,
         "smart_tools": True,
         "api_access": True,
+        "api_calls_per_month": 10000,
         "price_monthly_eur": 17.99,
         "price_annual_eur": 172.70,  # ~20% discount
     },
@@ -388,6 +415,7 @@ PLAN_LIMITS = {
         "batch_processing": True,
         "smart_tools": True,
         "api_access": True,
+        "api_calls_per_month": -1,
         "price_monthly_eur": 0,
         "price_annual_eur": 0,
     }
@@ -7693,6 +7721,162 @@ def _guard_region_pixels(clip: "fitz.Rect", zoom: float) -> None:
         )
 
 
+def _open_region_pdf(content: bytes) -> "fitz.Document":
+    """Open an uploaded PDF for region work, or raise the matching 4xx."""
+    try:
+        doc = fitz.open(stream=content, filetype="pdf")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not open this PDF")
+    if doc.needs_pass:
+        doc.close()
+        raise HTTPException(status_code=400, detail="Password-protected PDFs are not supported")
+    return doc
+
+
+# --- Shared region-render cores (one implementation, called by both the
+# --- web JWT routes and the public /api/v1 key-authed routes — no drift).
+
+async def _do_extract_region(content, page, fx0, fy0, fx1, fy1, dpi) -> bytes:
+    dpi = max(72, min(int(dpi), 1200))
+    doc = _open_region_pdf(content)
+    try:
+        if page < 1 or page > doc.page_count:
+            raise HTTPException(status_code=400, detail="Page out of range")
+        pg = doc[page - 1]
+        clip = _region_clip(pg, fx0, fy0, fx1, fy1)
+        zoom = dpi / 72.0
+        _guard_region_pixels(clip, zoom)
+
+        def _render():
+            return pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip).tobytes("png")
+
+        return await asyncio.to_thread(_render)
+    finally:
+        doc.close()
+
+
+async def _do_extract_region_batch(content, fx0, fy0, fx1, fy1, dpi, page_from, page_to) -> "io.BytesIO":
+    dpi = max(72, min(int(dpi), 1200))
+    doc = _open_region_pdf(content)
+    try:
+        total = doc.page_count
+        start = max(1, int(page_from))
+        end = int(page_to) if int(page_to) > 0 else total
+        end = min(end, total)
+        if start > end:
+            raise HTTPException(status_code=400, detail="Invalid page range")
+        if (end - start + 1) > MAX_REGION_BATCH_PAGES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Batch is limited to {MAX_REGION_BATCH_PAGES} pages — narrow the range",
+            )
+        zoom = dpi / 72.0
+
+        def _render_zip():
+            buf = io.BytesIO()
+            total_bytes = 0
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for n in range(start, end + 1):
+                    pg = doc[n - 1]
+                    clip = _region_clip(pg, fx0, fy0, fx1, fy1)
+                    _guard_region_pixels(clip, zoom)
+                    png = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip).tobytes("png")
+                    total_bytes += len(png)
+                    if total_bytes > MAX_REGION_BATCH_BYTES:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Batch output is too large — narrow the page range or lower the DPI",
+                        )
+                    zf.writestr(f"figure-p{n}-{dpi}dpi.png", png)
+            buf.seek(0)
+            return buf
+
+        return await asyncio.to_thread(_render_zip)
+    finally:
+        doc.close()
+
+
+async def _do_extract_region_ocr(content, page, fx0, fy0, fx1, fy1, dpi) -> list:
+    # OCR accuracy plateaus below print DPI; clamp so a huge crop can't stall.
+    dpi = max(150, min(int(dpi), 600))
+    doc = _open_region_pdf(content)
+    try:
+        if page < 1 or page > doc.page_count:
+            raise HTTPException(status_code=400, detail="Page out of range")
+        pg = doc[page - 1]
+        clip = _region_clip(pg, fx0, fy0, fx1, fy1)
+        zoom = dpi / 72.0
+        _guard_region_pixels(clip, zoom)
+
+        def _ocr():
+            pix = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+            if pix.n == 4:
+                img = img[:, :, :3]
+            result, _ = get_ocr()(img)
+            return [r[1] for r in result] if result else []
+
+        return await asyncio.to_thread(_ocr)
+    finally:
+        doc.close()
+
+
+# --- B2B PDF API: key generation + per-request auth/metering -----------------
+
+def _generate_api_key():
+    """Return (full_key, prefix, sha256_hash). The full key is shown to the
+    user exactly once at creation; only the hash + prefix are persisted."""
+    full = f"pdf_live_{secrets.token_hex(24)}"
+    prefix = full[:16]  # 'pdf_live_' + 7 hex — identifies, can't be used
+    key_hash = hashlib.sha256(full.encode()).hexdigest()
+    return full, prefix, key_hash
+
+
+def get_api_consumer(x_api_key: Optional[str] = Header(None, alias="X-API-Key")) -> Dict[str, Any]:
+    """Authenticate a B2B API request by X-API-Key: validate the key, enforce
+    the owner's plan api_access + monthly quota (hard cap → 429, no overage),
+    meter the call, and return the owner user dict."""
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="Missing API key. Send it in the X-API-Key header.")
+    key_hash = hashlib.sha256(x_api_key.encode()).hexdigest()
+    now = datetime.utcnow()
+    period = now.strftime("%Y-%m")
+    with db_session() as conn:
+        cursor = conn.cursor()
+        row = cursor.execute("SELECT * FROM api_keys WHERE key_hash = ?", (key_hash,)).fetchone()
+        if not row or row["revoked"]:
+            raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+        urow = cursor.execute("SELECT * FROM users WHERE id = ?", (row["user_id"],)).fetchone()
+        if not urow:
+            raise HTTPException(status_code=401, detail="API key owner no longer exists")
+        user = dict(urow)
+        if user.get("is_banned"):
+            raise HTTPException(status_code=403, detail="Account is suspended")
+        limits = get_user_plan_limits(user)
+        if not limits.get("api_access"):
+            raise HTTPException(status_code=403, detail="Your plan does not include API access. Upgrade to Gold to use the PDF API.")
+        quota = limits.get("api_calls_per_month", 0)
+        # Roll the monthly counter when the period changes (prepaid, hard cap).
+        period_calls = row["period_calls"] if row["period_ym"] == period else 0
+        if quota != -1 and period_calls >= quota:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Monthly API quota of {quota} calls reached. It resets next month, or upgrade your plan.",
+            )
+        # Atomic increment + monthly roll in one statement so concurrent calls
+        # can't lose an update (the counter stays accurate). The 429 pre-check
+        # above is best-effort exactly at the boundary — on a monthly soft cap a
+        # few simultaneous calls may slip through, which is acceptable.
+        cursor.execute(
+            "UPDATE api_keys SET calls_total = calls_total + 1, last_used_at = ?, "
+            "period_calls = CASE WHEN period_ym = ? THEN period_calls + 1 ELSE 1 END, "
+            "period_ym = ? WHERE id = ?",
+            (now.strftime("%Y-%m-%d %H:%M:%S"), period, period, row["id"]),
+        )
+    user["_api_key_id"] = row["id"]
+    return user
+
+
 @app.post("/api/extract-region")
 async def extract_region(
     file: UploadFile = File(...),
@@ -7704,47 +7888,20 @@ async def extract_region(
     dpi: int = Form(300),
     user: Dict[str, Any] = Depends(get_current_user_required)
 ):
-    """Render a rectangular region of a PDF page to a high-DPI PNG (Pro).
+    """Render a rectangular region of a PDF page to a high-DPI PNG (Pro, web).
 
-    This is the paid Advanced counterpart of the free, client-side
-    /tools/extract-figure tool. NOT related to the split-ocr handler.
+    Paid Advanced counterpart of the free, client-side /tools/extract-figure
+    tool. NOT related to the split-ocr handler. (See /api/v1/extract-region for
+    the key-authed public-API equivalent.)
     """
     limits = get_user_plan_limits(user)
     if not limits.get("smart_tools"):
         raise HTTPException(status_code=403, detail="High-DPI figure export requires a Pro plan")
-
-    dpi = max(72, min(int(dpi), 1200))
-
     content = await file.read()
     max_mb = limits.get("max_file_size_mb") or 100
     if len(content) > max_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
-
-    try:
-        doc = fitz.open(stream=content, filetype="pdf")
-    except Exception:
-        raise HTTPException(status_code=400, detail="Could not open this PDF")
-
-    try:
-        if doc.needs_pass:
-            raise HTTPException(status_code=400, detail="Password-protected PDFs are not supported")
-        if page < 1 or page > doc.page_count:
-            raise HTTPException(status_code=400, detail="Page out of range")
-        pg = doc[page - 1]
-        clip = _region_clip(pg, fx0, fy0, fx1, fy1)
-        zoom = dpi / 72.0
-        _guard_region_pixels(clip, zoom)
-        # Offload the CPU-bound render off the event loop (mirrors how the
-        # batch tools use a thread pool) so a big high-DPI render doesn't
-        # stall other requests.
-        def _render():
-            pix = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
-            return pix.tobytes("png")
-
-        png = await asyncio.to_thread(_render)
-    finally:
-        doc.close()
-
+    png = await _do_extract_region(content, page, fx0, fy0, fx1, fy1, dpi)
     return StreamingResponse(
         io.BytesIO(png),
         media_type="image/png",
@@ -7772,60 +7929,11 @@ async def extract_region_batch(
     limits = get_user_plan_limits(user)
     if not limits.get("smart_tools"):
         raise HTTPException(status_code=403, detail="Batch figure export requires a Pro plan")
-
-    dpi = max(72, min(int(dpi), 1200))
-
     content = await file.read()
     max_mb = limits.get("max_file_size_mb") or 100
     if len(content) > max_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
-
-    try:
-        doc = fitz.open(stream=content, filetype="pdf")
-    except Exception:
-        raise HTTPException(status_code=400, detail="Could not open this PDF")
-
-    try:
-        if doc.needs_pass:
-            raise HTTPException(status_code=400, detail="Password-protected PDFs are not supported")
-        total = doc.page_count
-        start = max(1, int(page_from))
-        end = int(page_to) if int(page_to) > 0 else total
-        end = min(end, total)
-        if start > end:
-            raise HTTPException(status_code=400, detail="Invalid page range")
-        if (end - start + 1) > MAX_REGION_BATCH_PAGES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Batch is limited to {MAX_REGION_BATCH_PAGES} pages — narrow the range",
-            )
-
-        zoom = dpi / 72.0
-
-        def _render_zip():
-            buf = io.BytesIO()
-            total_bytes = 0
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                for n in range(start, end + 1):
-                    pg = doc[n - 1]
-                    clip = _region_clip(pg, fx0, fy0, fx1, fy1)
-                    _guard_region_pixels(clip, zoom)
-                    pix = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
-                    png = pix.tobytes("png")
-                    total_bytes += len(png)
-                    if total_bytes > MAX_REGION_BATCH_BYTES:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Batch output is too large — narrow the page range or lower the DPI",
-                        )
-                    zf.writestr(f"figure-p{n}-{dpi}dpi.png", png)
-            buf.seek(0)
-            return buf
-
-        buf = await asyncio.to_thread(_render_zip)
-    finally:
-        doc.close()
-
+    buf = await _do_extract_region_batch(content, fx0, fy0, fx1, fy1, dpi, page_from, page_to)
     return StreamingResponse(
         buf,
         media_type="application/zip",
@@ -7851,45 +7959,150 @@ async def extract_region_ocr(
     limits = get_user_plan_limits(user)
     if not limits.get("smart_tools"):
         raise HTTPException(status_code=403, detail="Region OCR requires a Pro plan")
-
-    # OCR accuracy plateaus well below print DPI, so clamp to a sane band — a
-    # 1200-DPI crop would just stall RapidOCR with no recognition gain.
-    dpi = max(150, min(int(dpi), 600))
-
     content = await file.read()
     max_mb = limits.get("max_file_size_mb") or 100
     if len(content) > max_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
-
-    try:
-        doc = fitz.open(stream=content, filetype="pdf")
-    except Exception:
-        raise HTTPException(status_code=400, detail="Could not open this PDF")
-
-    try:
-        if doc.needs_pass:
-            raise HTTPException(status_code=400, detail="Password-protected PDFs are not supported")
-        if page < 1 or page > doc.page_count:
-            raise HTTPException(status_code=400, detail="Page out of range")
-        pg = doc[page - 1]
-        clip = _region_clip(pg, fx0, fy0, fx1, fy1)
-        zoom = dpi / 72.0
-        _guard_region_pixels(clip, zoom)
-
-        def _ocr():
-            pix = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
-            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-            # RapidOCR wants 3-channel RGB; drop the alpha plane if present.
-            if pix.n == 4:
-                img = img[:, :, :3]
-            result, _ = get_ocr()(img)
-            return [r[1] for r in result] if result else []
-
-        lines = await asyncio.to_thread(_ocr)
-    finally:
-        doc.close()
-
+    lines = await _do_extract_region_ocr(content, page, fx0, fy0, fx1, fy1, dpi)
     return JSONResponse({"text": "\n".join(lines), "lines": lines})
+
+
+# =============================================================================
+# B2B PDF API (public, key-authed) — /api/v1/*  +  key management (/api/api-keys)
+# Phase 1 surface: the extract-region family. Same engine as the web routes
+# above, but authenticated by X-API-Key and metered against the owner's plan.
+# =============================================================================
+
+@app.post("/api/v1/extract-region")
+async def api_v1_extract_region(
+    file: UploadFile = File(...),
+    page: int = Form(...),
+    fx0: float = Form(...),
+    fy0: float = Form(...),
+    fx1: float = Form(...),
+    fy1: float = Form(...),
+    dpi: int = Form(300),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: render a page region to a high-DPI PNG. Auth: X-API-Key."""
+    content = await file.read()
+    max_mb = get_user_plan_limits(consumer).get("max_file_size_mb") or 100
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
+    png = await _do_extract_region(content, page, fx0, fy0, fx1, fy1, dpi)
+    return StreamingResponse(
+        io.BytesIO(png),
+        media_type="image/png",
+        headers={"Content-Disposition": 'attachment; filename="figure.png"'},
+    )
+
+
+@app.post("/api/v1/extract-region-batch")
+async def api_v1_extract_region_batch(
+    file: UploadFile = File(...),
+    fx0: float = Form(...),
+    fy0: float = Form(...),
+    fx1: float = Form(...),
+    fy1: float = Form(...),
+    dpi: int = Form(300),
+    page_from: int = Form(1),
+    page_to: int = Form(0),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: same region across a page range → ZIP. Auth: X-API-Key."""
+    content = await file.read()
+    max_mb = get_user_plan_limits(consumer).get("max_file_size_mb") or 100
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
+    buf = await _do_extract_region_batch(content, fx0, fy0, fx1, fy1, dpi, page_from, page_to)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="figures.zip"'},
+    )
+
+
+@app.post("/api/v1/extract-region-ocr")
+async def api_v1_extract_region_ocr(
+    file: UploadFile = File(...),
+    page: int = Form(...),
+    fx0: float = Form(...),
+    fy0: float = Form(...),
+    fx1: float = Form(...),
+    fy1: float = Form(...),
+    dpi: int = Form(300),
+    consumer: Dict[str, Any] = Depends(get_api_consumer),
+):
+    """Public PDF API: OCR a page region → JSON {text, lines}. Auth: X-API-Key."""
+    content = await file.read()
+    max_mb = get_user_plan_limits(consumer).get("max_file_size_mb") or 100
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {max_mb}MB limit")
+    lines = await _do_extract_region_ocr(content, page, fx0, fy0, fx1, fy1, dpi)
+    return JSONResponse({"text": "\n".join(lines), "lines": lines})
+
+
+@app.post("/api/api-keys")
+async def create_api_key(
+    name: str = Form(""),
+    user: Dict[str, Any] = Depends(get_current_user_required),
+):
+    """Create an API key for the current user (requires a plan with API access).
+    The full key is returned exactly once and never stored in clear."""
+    if not get_user_plan_limits(user).get("api_access"):
+        raise HTTPException(status_code=403, detail="Your plan does not include API access. Upgrade to Gold to create API keys.")
+    full, prefix, key_hash = _generate_api_key()
+    key_id = uuid.uuid4().hex
+    label = (name or "API key").strip()[:60] or "API key"
+    with db_session() as conn:
+        conn.cursor().execute(
+            "INSERT INTO api_keys (id, user_id, name, key_prefix, key_hash) VALUES (?, ?, ?, ?, ?)",
+            (key_id, user["id"], label, prefix, key_hash),
+        )
+    return {
+        "id": key_id,
+        "name": label,
+        "key": full,
+        "key_prefix": prefix,
+        "warning": "Store this key now — it will not be shown again.",
+    }
+
+
+@app.get("/api/api-keys")
+async def list_api_keys(user: Dict[str, Any] = Depends(get_current_user_required)):
+    """List the current user's API keys (no secret material) + plan quota."""
+    limits = get_user_plan_limits(user)
+    period = datetime.utcnow().strftime("%Y-%m")
+    with db_session() as conn:
+        rows = conn.cursor().execute(
+            "SELECT id, name, key_prefix, created_at, last_used_at, revoked, calls_total, period_ym, period_calls "
+            "FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
+            (user["id"],),
+        ).fetchall()
+    keys = []
+    for r in rows:
+        d = dict(r)
+        d["period_calls"] = d["period_calls"] if d["period_ym"] == period else 0
+        d["revoked"] = bool(d["revoked"])
+        d.pop("period_ym", None)
+        keys.append(d)
+    return {
+        "keys": keys,
+        "api_access": bool(limits.get("api_access")),
+        "quota_per_month": limits.get("api_calls_per_month", 0),
+    }
+
+
+@app.delete("/api/api-keys/{key_id}")
+async def revoke_api_key(key_id: str, user: Dict[str, Any] = Depends(get_current_user_required)):
+    """Revoke one of the current user's API keys (idempotent)."""
+    with db_session() as conn:
+        cursor = conn.cursor()
+        row = cursor.execute("SELECT user_id FROM api_keys WHERE id = ?", (key_id,)).fetchone()
+        if not row or row["user_id"] != user["id"]:
+            raise HTTPException(status_code=404, detail="API key not found")
+        cursor.execute("UPDATE api_keys SET revoked = 1 WHERE id = ?", (key_id,))
+    return {"success": True, "id": key_id}
 
 
 if __name__ == "__main__":

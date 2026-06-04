@@ -21,6 +21,7 @@ const footerLinks = {
     { name: "About Us", href: "/about" },
     { name: "Contact", href: "/contact" },
     { name: "Pricing", href: "/pricing" },
+    { name: "PDF API", href: "/api-docs" },
     { name: "Blog", href: "/blog" },
     { name: "Automation", href: "/automation" },
   ],
