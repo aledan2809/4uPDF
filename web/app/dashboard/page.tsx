@@ -172,6 +172,21 @@ export default function DashboardPage() {
     }
   };
 
+  // Unauthenticated: the effect above redirects to /login. Show a neutral
+  // notice (no dashboard-shaped chrome) for the brief moment before it fires,
+  // so we never present account UI to a signed-out visitor.
+  if (!loading && !user) {
+    return (
+      <>
+        <Navbar />
+        <main className="min-h-screen flex items-center justify-center px-4">
+          <p className="text-gray-400" aria-live="polite">Redirecting to sign in…</p>
+        </main>
+        <Footer />
+      </>
+    );
+  }
+
   if (loading || !user) {
     return (
       <>
