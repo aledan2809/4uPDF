@@ -40,12 +40,12 @@ const faqs = [
   {
     question: "Is my PDF uploaded to a server?",
     answer:
-      "No. The page is rendered and cropped entirely in your browser. Your file never leaves your device, which makes it fast and private.",
+      "The free, screen-resolution export runs entirely in your browser — your file never leaves your device. High-DPI export (Pro) sends the file to our server to render it at full resolution, then removes it.",
   },
   {
     question: "What resolution is the exported image?",
     answer:
-      "The tool exports at your screen resolution. Higher-DPI export, batch extraction and OCR of the cropped region are in development.",
+      "The free export uses your screen resolution. Pro plans can export the selected region at 300, 600 or 1200 DPI — crisp enough for print or slides. Batch extraction and OCR of the region are in development.",
   },
   {
     question: "Does it work with scanned or password-protected PDFs?",
