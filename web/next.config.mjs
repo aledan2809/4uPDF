@@ -1,3 +1,23 @@
+// Content-Security-Policy — shipped as Report-Only first (G-4UPDF-CSP-001): it
+// only reports violations to the browser console, blocks nothing, so we can watch
+// for breakage before flipping to enforce. Covers what the app actually loads:
+// Next.js inline hydration + the inline GA/heartbeat/pageview scripts in
+// layout.tsx ('unsafe-inline'), Google Analytics (gtag), the self-hosted pdf.js
+// worker (blob:), CAS cross-promo beacons to ma.techbiz.ae, and remote ad images.
+const cspReportOnly = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://www.google-analytics.com https://cdn.jsdelivr.net",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  "connect-src 'self' https://www.google-analytics.com https://www.googletagmanager.com https://ma.techbiz.ae",
+  "worker-src 'self' blob:",
+  "frame-ancestors 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ');
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   pageExtensions: ['js', 'jsx', 'ts', 'tsx', 'md', 'mdx'],
@@ -57,6 +77,10 @@ const nextConfig = {
           {
             key: 'Permissions-Policy',
             value: 'geolocation=(), microphone=(), camera=()'
+          },
+          {
+            key: 'Content-Security-Policy-Report-Only',
+            value: cspReportOnly
           }
         ]
       }
