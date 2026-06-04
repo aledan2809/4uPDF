@@ -145,6 +145,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             (function(){
               var API = "${process.env.NEXT_PUBLIC_API_URL || ""}";
               if(!API) return;
+              // Analytics consent gate (GDPR / AdSense pre-req): only track once
+              // the visitor has accepted analytics cookies — same flag GA Consent
+              // Mode and ReturningVisitorPrompt use. No accept → no pageview, no
+              // first-touch storage.
+              function analyticsOk(){
+                try{ return JSON.parse(localStorage.getItem('cookieConsent')||'{}').analytics === true; }catch(e){ return false; }
+              }
               function getUtm(){
                 try{
                   var p = new URLSearchParams(window.location.search);
@@ -161,7 +168,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               // First-touch attribution: persist the very first landing source
               try{
                 var u0 = getUtm();
-                if((u0.utm_source || u0.utm_campaign || u0.fbclid) && !localStorage.getItem('_4u_acq')){
+                if(analyticsOk() && (u0.utm_source || u0.utm_campaign || u0.fbclid) && !localStorage.getItem('_4u_acq')){
                   localStorage.setItem('_4u_acq', JSON.stringify({
                     source: u0.utm_source || (u0.fbclid ? 'facebook' : ''),
                     campaign: u0.utm_campaign || '',
@@ -172,6 +179,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               }catch(e){}
               var tracked = {};
               function trackPageView(){
+                if(!analyticsOk()) return;
                 var page = window.location.pathname;
                 var ref = document.referrer || '';
                 var key = page + '|' + Date.now().toString().slice(0,-4);
@@ -197,6 +205,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 setTimeout(trackPageView, 100);
               };
               window.addEventListener('popstate', function(){ setTimeout(trackPageView, 100); });
+              // When the visitor accepts analytics cookies, capture the current
+              // landing pageview that was skipped before consent.
+              window.addEventListener('4u:consent', trackPageView);
             })();
           `}
         </Script>

@@ -25,6 +25,9 @@ export default function CookieConsent() {
         analytics_storage: 'granted'
       });
     }
+    // Let the first-party pageview tracker record this landing now that analytics
+    // is allowed (it skipped on load before consent).
+    try { window.dispatchEvent(new Event('4u:consent')); } catch { /* noop */ }
   };
 
   const acceptNecessary = () => {
