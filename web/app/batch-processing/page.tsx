@@ -43,7 +43,7 @@ export default function BatchProcessingDashboard() {
 
       if (batchType === "archive") {
         formData.append("file", selectedFiles[0]);
-        const response = await fetch("http://localhost:3099/api/archive-processor/upload", {
+        const response = await fetch("/api/archive-processor/upload", {
           method: "POST",
           headers,
           body: formData,
@@ -55,7 +55,7 @@ export default function BatchProcessingDashboard() {
           formData.append("files", selectedFiles[i]);
         }
         formData.append("split_pattern", "order");
-        const response = await fetch("http://localhost:3099/api/batch-document-splitter/upload", {
+        const response = await fetch("/api/batch-document-splitter/upload", {
           method: "POST",
           headers,
           body: formData,
@@ -67,7 +67,7 @@ export default function BatchProcessingDashboard() {
           formData.append("files", selectedFiles[i]);
         }
         formData.append("export_format", "excel");
-        const response = await fetch("http://localhost:3099/api/invoice-extractor/upload", {
+        const response = await fetch("/api/invoice-extractor/upload", {
           method: "POST",
           headers,
           body: formData,
@@ -79,7 +79,7 @@ export default function BatchProcessingDashboard() {
           formData.append("files", selectedFiles[i]);
         }
         formData.append("export_format", "excel");
-        const response = await fetch("http://localhost:3099/api/receipt-extractor/upload", {
+        const response = await fetch("/api/receipt-extractor/upload", {
           method: "POST",
           headers,
           body: formData,
@@ -115,7 +115,7 @@ export default function BatchProcessingDashboard() {
   const pollJobStatus = async (jobId: string) => {
     const interval = setInterval(async () => {
       try {
-        const response = await fetch(`http://localhost:3099/api/batch-processing/status/${jobId}`);
+        const response = await fetch(`/api/batch-processing/status/${jobId}`);
         const data = await response.json();
 
         setJobs((prev) =>

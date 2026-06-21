@@ -86,7 +86,7 @@ export default function InvoiceExtractorPage() {
         headers["Authorization"] = `Bearer ${token}`;
       }
 
-      const uploadResponse = await fetch("http://localhost:3099/api/invoice-extractor/upload", {
+      const uploadResponse = await fetch("/api/invoice-extractor/upload", {
         method: "POST",
         headers,
         body: formData,
@@ -100,7 +100,7 @@ export default function InvoiceExtractorPage() {
       const { job_id } = await uploadResponse.json();
 
       const pollStatus = async () => {
-        const statusResponse = await fetch(`http://localhost:3099/api/batch-processing/status/${job_id}`);
+        const statusResponse = await fetch(`/api/batch-processing/status/${job_id}`);
         const statusData = await statusResponse.json();
 
         setProgress(statusData.progress || 0);

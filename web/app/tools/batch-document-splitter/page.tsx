@@ -90,7 +90,7 @@ export default function BatchDocumentSplitterPage() {
         headers["Authorization"] = `Bearer ${token}`;
       }
 
-      const uploadResponse = await fetch("http://localhost:3099/api/batch-document-splitter/upload", {
+      const uploadResponse = await fetch("/api/batch-document-splitter/upload", {
         method: "POST",
         headers,
         body: formData,
@@ -104,7 +104,7 @@ export default function BatchDocumentSplitterPage() {
       const { job_id } = await uploadResponse.json();
 
       const pollStatus = async () => {
-        const statusResponse = await fetch(`http://localhost:3099/api/batch-processing/status/${job_id}`);
+        const statusResponse = await fetch(`/api/batch-processing/status/${job_id}`);
         const statusData = await statusResponse.json();
 
         setProgress(statusData.progress || 0);
