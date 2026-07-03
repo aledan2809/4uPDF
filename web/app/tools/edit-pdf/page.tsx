@@ -107,6 +107,7 @@ export default function EditPDFPage() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const renderTaskRef = useRef<{ cancel: () => void } | null>(null);
   const skipBlurRef = useRef(false);
+  const editBaselineRef = useRef<Edit | undefined>(undefined);
 
   const renderPage = useCallback(async (n: number) => {
     const pdf = pdfDocRef.current;
@@ -259,10 +260,13 @@ export default function EditPDFPage() {
   }, []);
 
   const openEditor = (item: TextItem) => {
+    editBaselineRef.current = edits[item.id];
     setEditingId(item.id);
   };
 
-  const commitEdit = (item: TextItem, value: string) => {
+  // Sync the pending edit live as the user types, without closing the editor,
+  // so the Save button + preview react on the first keystroke (no Enter needed).
+  const syncEdit = (item: TextItem, value: string) => {
     setEdits((prev) => {
       const next = { ...prev };
       if (value === item.str) {
@@ -277,6 +281,21 @@ export default function EditPDFPage() {
           newText: value,
         };
       }
+      return next;
+    });
+  };
+
+  const commitEdit = (item: TextItem, value: string) => {
+    syncEdit(item, value);
+    setEditingId(null);
+  };
+
+  // Escape: restore whatever was committed before this edit session began.
+  const cancelEdit = (item: TextItem) => {
+    setEdits((prev) => {
+      const next = { ...prev };
+      if (editBaselineRef.current) next[item.id] = editBaselineRef.current;
+      else delete next[item.id];
       return next;
     });
     setEditingId(null);
@@ -458,9 +477,9 @@ export default function EditPDFPage() {
             </div>
 
             <p className="text-sm text-gray-400 mb-3">
-              Click any word or line to edit it, then press <span className="text-gray-300">Enter</span> to confirm
-              (or <span className="text-gray-300">Esc</span> to cancel). When you&apos;re done, click the green{" "}
-              <span className="text-green-400 font-medium">Save &amp; Download</span> button to get your edited PDF.
+              Click any word or line and type your change — it&apos;s saved automatically as you type
+              (press <span className="text-gray-300">Esc</span> to discard it). When you&apos;re done, click the
+              green <span className="text-green-400 font-medium">Save &amp; Download</span> button to download your edited PDF.
             </p>
 
             {/* Canvas + clickable text layer */}
@@ -477,6 +496,7 @@ export default function EditPDFPage() {
                           autoFocus
                           defaultValue={edits[item.id]?.newText ?? item.str}
                           onFocus={(e) => e.currentTarget.select()}
+                          onChange={(e) => syncEdit(item, e.currentTarget.value)}
                           onKeyDown={(e) => {
                             if (e.key === "Enter") {
                               e.preventDefault();
@@ -484,7 +504,7 @@ export default function EditPDFPage() {
                             } else if (e.key === "Escape") {
                               e.preventDefault();
                               skipBlurRef.current = true;
-                              setEditingId(null);
+                              cancelEdit(item);
                             }
                           }}
                           onBlur={(e) => {
