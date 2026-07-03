@@ -46,3 +46,13 @@ At the start of every session opened on this project:
 
 - `Reports/AUDIT_E2E_2026-05-17.md` — ML2 Wave 3 audit
 - `Reports/DIRECT-CHANGES-2026-05.md` — monthly Direct-session change log
+
+## True E2E Full Audit — 2026-07-03
+
+### Eliminated
+- **G-4UPDF-EXTRACTORS-500** — `/api/invoice-extractor` + `/api/receipt-extractor` returned 500 on EVERY request (`extract_invoice_data()/extract_receipt_data() takes 2 positional arguments but 3 were given`). Root cause: a later 2-arg `(doc, ocr)` def shadowed the 3-arg `(pdf_path, ocr, dpi)` version the endpoints call → the PAID (silver+) extractors never worked. Fix: renamed the doc-based versions → `*_from_doc` (+ 2 call sites). Commit `8d7de5b`, deployed, live-verified 200 with extracted data. **Eliminated 2026-07-03.**
+- **G-4UPDF-FUNNEL-DEADEND** — Pricing "Subscribe" for logged-out users dead-ended at auth (no return to checkout; Login dropped the plan; signup Sign-in link dropped the plan). Fix: Pricing auto-resumes checkout on `?plan=X&checkout=true`; Login + signup carry the plan. Commit `c2b98f6`, deployed. **Eliminated 2026-07-03.**
+
+### Open
+- **G-4UPDF-SPLITINV-TIER** (product decision) — `/api/split-invoices` (api.py:5857) has NO auth/tier gate; anonymous + free users can run it, though it is presented under "Smart Tools" and its sibling `invoice-extractor` is silver+ gated (403 for free). Decide: intentionally free, or add a tier gate to stop a revenue leak. NOT changed unilaterally.
+- **G-4UPDF-E2E-UI-PHASES** — full in-browser per-role journey walk (real Chrome), Tester-Gateway config, concurrency, a11y/visual-regression, stress — not yet run (genuinely open; test users + fixtures now exist to make this cheap).

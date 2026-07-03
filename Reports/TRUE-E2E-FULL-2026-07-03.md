@@ -58,7 +58,34 @@ So a logged-in user clicking Subscribe now: `create-checkout` → broker (compan
 - **Links/buttons** — all nav + tool routes healthy (0 dead).
 
 ## Open follow-ups (not blocking revenue)
-- Provision a 4uPDF test user + run the in-browser auto-resume walk (Subscribe → signup → auto-checkout → Stripe) as a regression.
-- Full journey-audit per role + Tester-Gateway config + a11y/visual regression (phases 3/4/8 completion).
+- Full journey-audit per role in a real browser + Tester-Gateway config + a11y/visual regression (phases 3/4/8 UI-level completion).
 - SSR legal pages from Legal (still hardcoded) + DSR UI form.
 - Rip out the now-unused direct-Stripe webhook/portal/settings.
+
+---
+
+# ADDENDUM — full execution (2026-07-03, after L290 correction)
+
+The initial pass marked heavy phases "NOT RUN". That was rejected (rightly) and reversed — **provisioning test users + generating the fixture library + exercising every tool IS the audit** (lesson **L290**). Full execution below.
+
+## Test infrastructure created
+- **3 role users** (register API + DB tier/role): `e2e-free@4updf-test.com` (free), `e2e-gold@4updf-test.com` (gold), `e2e-admin@4updf-test.com` (superadmin). Creds in `Master/credentials/4updf.env` (`E2E_*`).
+- **13-file fixture library** covering every input type: `multipage.pdf`, `invoice.pdf`, `scanned.pdf` (image-only/OCR), `protected.pdf` (pw `test123`), `form.pdf`, `image.jpg`/`image.png`, `a.pdf`/`b.pdf` (merge), `doc.docx`, `sheet.xlsx`, `slides.pptx`, `page.html`.
+
+## Tool coverage — 37 endpoints exercised with real inputs
+**35 PASS / 2 real FAIL** (8 initial "fails" were harness param-name mismatches — corrected, all passed: protect `user_password`, jpg/png/invoice/receipt need `files` plural, sign `signature_text`, redact `redact_text`, organize `page_order`/`reverse`).
+Verified working (real output, not just 200): merge, split, compress, rotate, delete-pages, extract-pages, add-page-numbers, flatten, crop, protect, pdf-to-jpg/png/word/excel/powerpoint/text, jpg/png-to-pdf, excel/powerpoint/html-to-pdf, edit-pdf (add-text), **edit-pdf-text (new editor)**, auto-rename, document-detector, repair, sign-pdf, redact-pdf, split-by-text, split-invoices, annotate, organize, extract-text-ocr, ocr-layer, split-ocr (NO-TOUCH, tested read-only).
+
+## 🔴 Real bugs found + FIXED (TWG)
+- **invoice-extractor + receipt-extractor were 100% broken** (`api.py`): a later 2-arg `extract_invoice_data(doc, ocr)` / `extract_receipt_data(doc, ocr)` def **shadowed** the 3-arg `(pdf_path, ocr, dpi)` version the endpoints call → every request 500'd (`takes 2 positional arguments but 3 were given`). The **paid (silver+) invoice/receipt extraction never worked.** Fixed by renaming the doc-based versions to `*_from_doc` (+ their 2 call sites) — commit `8d7de5b`, deployed. **Verified live 200 with extracted data** (invoice_number/date/VAT parsed).
+
+## Role / tier coverage
+- Free user **correctly blocked** from `invoice-extractor` (403) ✅; free works on free tools (merge 200) ✅.
+- Superadmin surface **correctly locked** — `/api/admin/*` returns 401 without the separate superadmin JWT (Bearer user token insufficient by design) ✅.
+- ⚠️ **`/api/split-invoices` has NO auth/tier gate** (api.py:5857) — anonymous/free users can run it, though it sits under "Smart Tools". **Product decision needed:** intentionally free, or a revenue leak to gate (like invoice-extractor)? Logged as `G-4UPDF-SPLITINV-TIER` (OPEN) — not changed unilaterally.
+
+## Money path (re-confirmed)
+Subscribe funnel fixed (commit `c2b98f6`) + broker checkout verified to real `checkout.stripe.com` (`cs_live_…`).
+
+## Corrected completion
+Phases 1 (test accounts), 3 (tool coverage), 6 (money workflow), + role coverage → **DONE**. Real bugs found → **FIXED + TWG-verified**. Remaining: full in-browser per-role journey (real Chrome), TG config, concurrency, a11y/visual, stress — genuinely open (not dismissed).
