@@ -4964,6 +4964,279 @@ async def edit_pdf(
 
 
 # ============================================================================
+# Edit PDF text (in-place replace) API
+# ============================================================================
+
+def _detect_bg_color(page, rect):
+    """Best-effort background colour under a text rect, as an (r,g,b) 0..1 tuple.
+
+    Samples the border pixels of the rect (glyph ink rarely reaches the corners
+    of a text bounding box) and returns the most common colour, so a redaction
+    fill blends into a white page or a coloured table cell. Falls back to white.
+    """
+    try:
+        pix = page.get_pixmap(clip=fitz.Rect(rect), dpi=72, alpha=False)
+        w, h = pix.width, pix.height
+        if w <= 0 or h <= 0:
+            return (1, 1, 1)
+        pts = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1),
+               (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)]
+        from collections import Counter
+        samples = []
+        for x, y in pts:
+            px = pix.pixel(x, y)
+            if isinstance(px, (tuple, list)) and len(px) >= 3:
+                samples.append(tuple(px[:3]))
+        if samples:
+            common = Counter(samples).most_common(1)[0][0]
+            return tuple(c / 255 for c in common)
+    except Exception:
+        pass
+    return (1, 1, 1)
+
+
+@app.post("/api/edit-pdf-text")
+async def edit_pdf_text(
+    file: UploadFile = File(...),
+    edits: str = Form(...),
+):
+    """Replace existing text runs in a PDF in-place.
+
+    `edits` is a JSON array. Each item identifies an existing text run by a
+    click point in page fractions (fx, fy; top-left origin) plus its original
+    text, and supplies the replacement:
+        [{"page": 1, "fx": 0.42, "fy": 0.28,
+          "old_text": "22-Iul-2024", "new_text": "22-Iul-2026"}, ...]
+
+    Each matched span is redacted (filled with the detected background colour)
+    and its text redrawn at the same baseline, size and colour using the span's
+    own embedded font (extracted from the PDF) so the edit is visually seamless.
+    Multiple edits inside one span are applied as substring replacements so the
+    rest of the run is preserved. Falls back to a bundled Unicode font when the
+    embedded font can not be extracted or lacks a needed glyph.
+    """
+    import json as _json
+
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {"id": job_id, "status": "processing", "progress": 0, "started_at": time.time()}
+
+    saved_file = save_upload_file(file)
+    tmp_fonts = []
+    _font_cache = {}
+
+    def _covers(path, text):
+        try:
+            if path not in _font_cache:
+                _font_cache[path] = fitz.Font(fontfile=path)
+            f = _font_cache[path]
+            return all(f.has_glyph(ord(c)) for c in text if not c.isspace())
+        except Exception:
+            return False
+
+    try:
+        try:
+            edit_list = _json.loads(edits)
+        except Exception:
+            raise HTTPException(status_code=400, detail="`edits` must be valid JSON")
+        if not isinstance(edit_list, list) or not edit_list:
+            raise HTTPException(status_code=400, detail="No edits provided")
+        if len(edit_list) > 500:
+            raise HTTPException(status_code=400, detail="Too many edits (max 500)")
+
+        try:
+            doc = fitz.open(str(saved_file))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not read the file as a PDF.")
+        if getattr(doc, "needs_pass", False):
+            doc.close()
+            raise HTTPException(status_code=400, detail="This PDF is password-protected. Remove the password first (Unlock PDF), then edit it.")
+        n_pages = doc.page_count
+        if n_pages == 0:
+            doc.close()
+            raise HTTPException(status_code=400, detail="This PDF has no pages.")
+
+        def _norm_font(name):
+            return name.split("+", 1)[-1] if name and "+" in name else (name or "")
+
+        by_page = {}
+        for e in edit_list:
+            try:
+                pidx = int(e["page"]) - 1
+                fx = float(e["fx"]); fy = float(e["fy"])
+                new_text = str(e.get("new_text", ""))
+                old_text = str(e.get("old_text", ""))
+            except (KeyError, TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Each edit needs page, fx, fy, new_text")
+            if pidx < 0 or pidx >= n_pages:
+                raise HTTPException(status_code=400, detail="Edit references a page out of range")
+            by_page.setdefault(pidx, []).append({"fx": fx, "fy": fy, "old": old_text, "new": new_text})
+
+        applied = 0
+        for pidx, elist in by_page.items():
+            page = doc[pidx]
+            W, H = page.rect.width, page.rect.height
+
+            font_xref = {}
+            for f in page.get_fonts(full=True):
+                font_xref[_norm_font(f[3])] = f[0]
+
+            spans = []
+            for b in page.get_text("dict").get("blocks", []):
+                for l in b.get("lines", []):
+                    for s in l.get("spans", []):
+                        if s.get("text", "").strip():
+                            spans.append(s)
+
+            def _norm_txt(t):
+                return " ".join((t or "").split())
+
+            # Match each edit to a span, then group substring edits by span so a
+            # multi-run span is redacted+reinserted exactly once.
+            span_edits = {}
+            for ed in elist:
+                px, py = ed["fx"] * W, ed["fy"] * H
+                target, best_area = None, None
+                for s in spans:
+                    x0, y0, x1, y1 = s["bbox"]
+                    if x0 <= px <= x1 and y0 <= py <= y1:
+                        area = (x1 - x0) * (y1 - y0)
+                        if best_area is None or area < best_area:
+                            best_area, target = area, s
+                if target is None and ed["old"]:
+                    want, best_d = _norm_txt(ed["old"]), None
+                    for s in spans:
+                        if want and want in _norm_txt(s["text"]):
+                            cx = (s["bbox"][0] + s["bbox"][2]) / 2
+                            cy = (s["bbox"][1] + s["bbox"][3]) / 2
+                            dd = (cx - px) ** 2 + (cy - py) ** 2
+                            if best_d is None or dd < best_d:
+                                best_d, target = dd, s
+                if target is None:
+                    continue
+                key = tuple(round(v, 2) for v in target["bbox"])
+                span_edits.setdefault(key, {"span": target, "subs": []})["subs"].append((ed["old"], ed["new"]))
+
+            if not span_edits:
+                continue
+
+            # Resolve the final text per span first, skipping any substring that
+            # does not actually occur in the span, so an edit can never blow away
+            # the rest of the run. Only spans whose text really changes are then
+            # redacted + redrawn.
+            planned = []  # (span, final_text)
+            for info in span_edits.values():
+                s = info["span"]
+                orig = s.get("text", "")
+                text = orig
+                for old_sub, new_sub in info["subs"]:
+                    if old_sub and old_sub in text:
+                        text = text.replace(old_sub, new_sub, 1)
+                    elif not old_sub:
+                        text = new_sub  # explicit whole-span replacement
+                    # else: unmatched substring -> leave the span untouched
+                if text != orig:
+                    planned.append((s, text))
+
+            if not planned:
+                continue
+
+            for s, _ in planned:
+                r = fitz.Rect(s["bbox"])
+                page.add_redact_annot(r, fill=_detect_bg_color(page, r))
+            try:
+                page.apply_redactions(
+                    images=fitz.PDF_REDACT_IMAGE_NONE,
+                    graphics=getattr(fitz, "PDF_REDACT_LINE_ART_NONE", 0),
+                )
+            except TypeError:
+                page.apply_redactions()
+
+            # per-page font registration cache (fontfile path -> registered name)
+            font_reg = {}
+
+            def _reg(path):
+                if path not in font_reg:
+                    name = f"EF{len(font_reg)}"
+                    try:
+                        page.insert_font(fontname=name, fontfile=path)
+                        font_reg[path] = name
+                    except Exception:
+                        font_reg[path] = None
+                return font_reg[path]
+
+            for s, text in planned:
+                origin = s.get("origin") or (s["bbox"][0], s["bbox"][3])
+                size = s.get("size", 11)
+                ci = s.get("color", 0)
+                col = (((ci >> 16) & 255) / 255, ((ci >> 8) & 255) / 255, (ci & 255) / 255)
+
+                fontfile = None
+                xref = font_xref.get(_norm_font(s.get("font", "")))
+                if xref:
+                    try:
+                        _n, ext, _t, buf = doc.extract_font(xref)
+                        if buf and ext in ("ttf", "otf"):
+                            tf = UPLOAD_DIR / f"_font_{uuid.uuid4().hex[:8]}.{ext}"
+                            tf.write_bytes(buf)
+                            tmp_fonts.append(tf)
+                            fontfile = str(tf)
+                    except Exception:
+                        fontfile = None
+                # embedded subset may lack a glyph the new text needs → Unicode font
+                if not fontfile or not _covers(fontfile, text):
+                    fontfile = UNICODE_FONT_PATH
+
+                name = _reg(fontfile) if fontfile else None
+                try:
+                    if name:
+                        page.insert_text(fitz.Point(origin[0], origin[1]), text,
+                                         fontsize=size, fontname=name, color=col)
+                    else:
+                        page.insert_text(fitz.Point(origin[0], origin[1]), text,
+                                         fontsize=size, fontname="helv", color=col)
+                    applied += 1
+                except Exception:
+                    page.insert_text(fitz.Point(origin[0], origin[1]), text,
+                                     fontsize=size, fontname="helv", color=col)
+                    applied += 1
+
+        if applied == 0:
+            doc.close()
+            raise HTTPException(status_code=422, detail="Could not match any of the selected text. Click directly on the text you want to change and try again.")
+
+        output_path = create_output_path("edited")
+        doc.save(str(output_path), deflate=True, garbage=3)
+        doc.close()
+
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["progress"] = 100
+        return {
+            "job_id": job_id,
+            "status": "done",
+            "download_url": f"/api/download/{output_path.name}",
+            "filename": output_path.name,
+            "edits_applied": applied,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        logger.exception("edit-pdf-text error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while editing the PDF")
+    finally:
+        for p in tmp_fonts:
+            try:
+                Path(p).unlink(missing_ok=True)
+            except Exception:
+                pass
+        try:
+            saved_file.unlink()
+        except Exception:
+            pass
+
+
+# ============================================================================
 # Annotate PDF API
 # ============================================================================
 

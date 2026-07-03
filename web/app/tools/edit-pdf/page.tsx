@@ -1,352 +1,373 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import ToolPageLayout from "../../components/ToolPageLayout";
 import FileUploadZone from "../../components/FileUploadZone";
+import type { PDFDocumentProxy } from "pdfjs-dist";
+
+// Lazy-load pdf.js only in the browser (it touches DOMMatrix/Worker, so it must
+// never run during SSR). The worker is self-hosted at /pdf.worker.min.mjs, so
+// it is same-origin + always version-matched — no CDN, CSP-friendly.
+let pdfjsPromise: Promise<typeof import("pdfjs-dist")> | null = null;
+function getPdfjs() {
+  if (!pdfjsPromise) {
+    pdfjsPromise = import("pdfjs-dist").then((mod) => {
+      mod.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+      return mod;
+    });
+  }
+  return pdfjsPromise;
+}
+
+interface TextItem {
+  id: string;
+  page: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  str: string;
+  fcx: number; // page-fraction of the item centre (top-left origin)
+  fcy: number;
+}
+
+interface Edit {
+  id: string;
+  page: number;
+  fcx: number;
+  fcy: number;
+  oldText: string;
+  newText: string;
+}
 
 const faqs = [
   {
-    question: "How do I add text to a PDF?",
+    question: "How do I edit existing text in a PDF?",
     answer:
-      "Upload your PDF file, enter the text you want to add, choose the page number, position, font size, and color, then click Add Text. Your edited PDF will be ready for download.",
+      "Upload your PDF — it is rendered right in your browser. Click on any word or line and an edit box opens with its current text. Change it, press Enter, then click “Apply changes & Download”. The original wording is replaced in place, keeping the same font, size and position.",
   },
   {
-    question: "Can I choose where the text appears on the page?",
+    question: "Why did the old tool say it couldn't find the text?",
     answer:
-      "Yes! You can use preset positions (top, center, bottom) or enter custom X and Y coordinates to place text exactly where you want it.",
+      "The previous version only stamped new text at fixed coordinates — it never detected the existing text. This version reads the PDF's real text layer, so you can click directly on the words you want to change.",
   },
   {
-    question: "Can I change the text color?",
+    question: "Will the edited text match the original font?",
     answer:
-      "Yes, you can pick any color using the color picker. The selected color will be applied to the text you add to the PDF.",
+      "Yes. The tool extracts the font that is already embedded in your PDF and re-draws your new text with it, at the same size and colour, so the change blends in. If a character isn't in the embedded font, a Unicode fallback font is used.",
   },
   {
-    question: "Does this tool support special characters and diacritics?",
+    question: "Does this work on scanned PDFs?",
     answer:
-      "Yes! The tool uses Unicode fonts to support special characters, diacritics, and international text.",
+      "No — a scanned PDF is just an image with no real text to click. Run it through an OCR tool first (see Searchable PDF) to add a text layer, then edit it here.",
   },
   {
-    question: "Can I add text to a specific page?",
+    question: "Is my file uploaded?",
     answer:
-      "Yes, you can specify the exact page number where you want the text to appear.",
+      "The page is rendered entirely in your browser. Your file is only sent to the server when you click “Apply changes & Download”, and it is removed after processing.",
   },
 ];
 
 const relatedTools = [
-  { name: "Watermark PDF", href: "/tools/watermark-pdf", description: "Add watermarks to your PDF" },
   { name: "Add Page Numbers", href: "/tools/add-page-numbers", description: "Number your PDF pages" },
+  { name: "Watermark PDF", href: "/tools/watermark-pdf", description: "Add watermarks to your PDF" },
   { name: "Extract Text", href: "/tools/extract-text-from-pdf", description: "Extract text from PDF" },
 ];
 
-type PositionMode = "preset" | "custom";
+const howItWorks = [
+  { title: "Open a PDF", description: "Drop your PDF — it is rendered in your browser with its real text made clickable." },
+  { title: "Click & edit", description: "Click any word or line, change the text in the box, and press Enter." },
+  { title: "Apply & download", description: "Click Apply — the text is replaced in place, keeping the original font and layout." },
+];
 
-const presetPositions = [
-  { value: "top-left", label: "Top Left", x: 50, y: 50 },
-  { value: "top-center", label: "Top Center", x: 300, y: 50 },
-  { value: "top-right", label: "Top Right", x: 500, y: 50 },
-  { value: "center", label: "Center", x: 300, y: 420 },
-  { value: "bottom-left", label: "Bottom Left", x: 50, y: 780 },
-  { value: "bottom-center", label: "Bottom Center", x: 300, y: 780 },
-  { value: "bottom-right", label: "Bottom Right", x: 500, y: 780 },
+const benefits = [
+  "Click directly on existing text to edit it",
+  "Keeps the original font, size and colour",
+  "Edit multiple words across multiple pages",
+  "Live preview of every pending change",
+  "Rendered in your browser — file only sent on apply",
 ];
 
 export default function EditPDFPage() {
-  const [file, setFile] = useState<File | null>(null);
-  const [text, setText] = useState<string>("");
-  const [pageNumber, setPageNumber] = useState<number>(1);
-  const [positionMode, setPositionMode] = useState<PositionMode>("preset");
-  const [presetPosition, setPresetPosition] = useState<string>("center");
-  const [positionX, setPositionX] = useState<number>(300);
-  const [positionY, setPositionY] = useState<number>(420);
-  const [fontSize, setFontSize] = useState<number>(14);
-  const [color, setColor] = useState<string>("#000000");
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [result, setResult] = useState<{ downloadUrl: string; filename: string } | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [numPages, setNumPages] = useState(0);
+  const [pageNum, setPageNum] = useState(1);
+  const [textItems, setTextItems] = useState<TextItem[]>([]);
+  const [edits, setEdits] = useState<Record<string, Edit>>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
+  const [result, setResult] = useState<{ downloadUrl: string; filename: string; count: number } | null>(null);
 
-  const handleFilesSelected = useCallback((files: File[]) => {
-    if (files.length > 0) {
-      setFile(files[0]);
-      setResult(null);
-      setError(null);
-    }
-  }, []);
+  const fileRef = useRef<File | null>(null);
+  const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
+  const loadingTaskRef = useRef<{ destroy: () => Promise<void> } | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const renderTaskRef = useRef<{ cancel: () => void } | null>(null);
+  const skipBlurRef = useRef(false);
 
-  const hexToRgb = (hex: string): string => {
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return `${r},${g},${b}`;
-  };
-
-  const handleEdit = async () => {
-    if (!file) {
-      setError("Please upload a PDF file");
-      return;
-    }
-    if (!text.trim()) {
-      setError("Please enter text to add");
-      return;
-    }
-
-    setIsProcessing(true);
-    setProgress(0);
-    setError(null);
+  const renderPage = useCallback(async (n: number) => {
+    const pdf = pdfDocRef.current;
+    const canvas = canvasRef.current;
+    if (!pdf || !canvas) return;
 
     try {
-      let finalX = positionX;
-      let finalY = positionY;
+      renderTaskRef.current?.cancel();
+    } catch {
+      /* ignore cancellation of an already-finished task */
+    }
 
-      if (positionMode === "preset") {
-        const preset = presetPositions.find((p) => p.value === presetPosition);
-        if (preset) {
-          finalX = preset.x;
-          finalY = preset.y;
+    const pdfjs = await getPdfjs();
+    const page = await pdf.getPage(n);
+    const base = page.getViewport({ scale: 1 });
+    const containerWidth = containerRef.current?.clientWidth || 760;
+    const scale = Math.min(Math.max((containerWidth - 4) / base.width, 0.2), 3);
+    const viewport = page.getViewport({ scale });
+    const outputScale = window.devicePixelRatio || 1;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    canvas.width = Math.floor(viewport.width * outputScale);
+    canvas.height = Math.floor(viewport.height * outputScale);
+    canvas.style.width = `${Math.floor(viewport.width)}px`;
+    canvas.style.height = `${Math.floor(viewport.height)}px`;
+
+    const task = page.render({
+      canvas,
+      canvasContext: ctx,
+      viewport,
+      transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined,
+    });
+    renderTaskRef.current = task;
+    try {
+      await task.promise;
+    } catch (err) {
+      if (err && typeof err === "object" && "name" in err && (err as { name: string }).name === "RenderingCancelledException") {
+        return;
+      }
+      throw err;
+    }
+
+    // Build the clickable text layer from the PDF's real text content.
+    const tc = await page.getTextContent();
+    const cw = viewport.width;
+    const ch = viewport.height;
+    const items: TextItem[] = [];
+    (tc.items as unknown[]).forEach((raw, idx) => {
+      const it = raw as { str?: string; width?: number; transform?: number[] };
+      const str = typeof it.str === "string" ? it.str : "";
+      if (!str.trim() || !it.transform) return;
+      const tx = pdfjs.Util.transform(viewport.transform, it.transform);
+      const fontHeight = Math.hypot(tx[2], tx[3]) || Math.abs(tx[3]) || 10;
+      const left = tx[4];
+      const top = tx[5] - fontHeight;
+      const width = (it.width || 0) * scale;
+      if (width < 1) return;
+      items.push({
+        id: `${n}:${idx}`,
+        page: n,
+        left,
+        top,
+        width,
+        height: fontHeight,
+        str,
+        fcx: (left + width / 2) / cw,
+        fcy: (top + fontHeight / 2) / ch,
+      });
+    });
+    setTextItems(items);
+  }, []);
+
+  const loadPdf = useCallback(
+    async (file: File) => {
+      setError(null);
+      setLoading(true);
+      setResult(null);
+      setEdits({});
+      setEditingId(null);
+      try {
+        const pdfjs = await getPdfjs();
+        const data = await file.arrayBuffer();
+        try {
+          renderTaskRef.current?.cancel();
+        } catch {
+          /* no-op */
         }
+        await loadingTaskRef.current?.destroy().catch(() => {});
+        const loadingTask = pdfjs.getDocument({ data });
+        loadingTaskRef.current = loadingTask;
+        const doc = await loadingTask.promise;
+        pdfDocRef.current = doc;
+        fileRef.current = file;
+        setFileName(file.name);
+        setNumPages(doc.numPages);
+        setPageNum(1);
+        requestAnimationFrame(() => {
+          renderPage(1).catch(() => setError("Could not render this PDF."));
+        });
+      } catch (err) {
+        const name = err && typeof err === "object" && "name" in err ? (err as { name: string }).name : "";
+        if (name === "PasswordException") {
+          setError("This PDF is password-protected. Remove the password with the Unlock PDF tool first.");
+        } else {
+          setError("Could not open this file. Make sure it is a valid PDF.");
+        }
+        pdfDocRef.current = null;
+        setFileName(null);
+        setNumPages(0);
+      } finally {
+        setLoading(false);
       }
+    },
+    [renderPage]
+  );
 
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("text", text);
-      formData.append("page_number", pageNumber.toString());
-      formData.append("position_x", finalX.toString());
-      formData.append("position_y", finalY.toString());
-      formData.append("font_size", fontSize.toString());
-      formData.append("color", hexToRgb(color));
+  const goToPage = useCallback(
+    (n: number) => {
+      if (n < 1 || n > numPages) return;
+      setEditingId(null);
+      setPageNum(n);
+      renderPage(n).catch(() => setError("Could not render this page."));
+    },
+    [numPages, renderPage]
+  );
 
-      const response = await fetch("/api/edit-pdf", {
-        method: "POST",
-        body: formData,
+  // Re-render the current page on resize so the text layer stays aligned.
+  useEffect(() => {
+    if (!pdfDocRef.current) return;
+    let raf = 0;
+    const onResize = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        setEditingId(null);
+        renderPage(pageNum).catch(() => {});
       });
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(raf);
+    };
+  }, [pageNum, renderPage]);
 
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || "Failed to edit PDF");
+  useEffect(() => {
+    return () => {
+      loadingTaskRef.current?.destroy().catch(() => {});
+    };
+  }, []);
+
+  const openEditor = (item: TextItem) => {
+    setEditingId(item.id);
+  };
+
+  const commitEdit = (item: TextItem, value: string) => {
+    setEdits((prev) => {
+      const next = { ...prev };
+      if (value === item.str) {
+        delete next[item.id];
+      } else {
+        next[item.id] = {
+          id: item.id,
+          page: item.page,
+          fcx: item.fcx,
+          fcy: item.fcy,
+          oldText: item.str,
+          newText: value,
+        };
       }
+      return next;
+    });
+    setEditingId(null);
+  };
 
-      const data = await response.json();
-      setProgress(100);
-      setResult({
-        downloadUrl: data.download_url,
-        filename: data.filename,
-      });
+  const removeEdit = (id: string) =>
+    setEdits((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+
+  const applyEdits = useCallback(async () => {
+    const file = fileRef.current;
+    const list = Object.values(edits);
+    if (!file || list.length === 0) return;
+    setApplying(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append(
+        "edits",
+        JSON.stringify(
+          list.map((e) => ({
+            page: e.page,
+            fx: e.fcx,
+            fy: e.fcy,
+            old_text: e.oldText,
+            new_text: e.newText,
+          }))
+        )
+      );
+      const res = await fetch("/api/edit-pdf-text", { method: "POST", body: form });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d?.detail || "Failed to edit PDF");
+      }
+      const data = await res.json();
+      setResult({ downloadUrl: data.download_url, filename: data.filename, count: data.edits_applied });
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
-      setIsProcessing(false);
+      setApplying(false);
     }
+  }, [edits]);
+
+  const reset = () => {
+    try {
+      renderTaskRef.current?.cancel();
+    } catch {
+      /* no-op */
+    }
+    loadingTaskRef.current?.destroy().catch(() => {});
+    loadingTaskRef.current = null;
+    fileRef.current = null;
+    pdfDocRef.current = null;
+    setFileName(null);
+    setNumPages(0);
+    setPageNum(1);
+    setTextItems([]);
+    setEdits({});
+    setEditingId(null);
+    setResult(null);
+    setError(null);
   };
 
-  const formatFileSize = (bytes: number) => {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / (1024 * 1024)).toFixed(2) + " MB";
-  };
+  const editList = Object.values(edits);
+  const editCount = editList.length;
 
   return (
     <ToolPageLayout
       title="Edit PDF"
-      description="Add text annotations to your PDF documents. Choose position, font size, color, and target page."
+      description="Click on the existing text in your PDF and change it in place — keeping the original font, size and position. Rendered in your browser; nothing is uploaded until you apply."
+      howItWorks={howItWorks}
+      benefits={benefits}
       faqs={faqs}
       relatedTools={relatedTools}
     >
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-8">
-        {!result ? (
-          <>
-            <FileUploadZone
-              accept=".pdf"
-              multiple={false}
-              maxSizeMB={50}
-              onFilesSelected={handleFilesSelected}
-            />
-
-            {file && (
-              <div className="mt-6 space-y-6">
-                <div className="flex items-center gap-3 p-3 bg-gray-800 rounded-lg">
-                  <div className="w-10 h-10 bg-red-600/20 rounded flex items-center justify-center">
-                    <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 2l5 5h-5V4zM6 20V4h6v6h6v10H6z" />
-                    </svg>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-white truncate">{file.name}</p>
-                    <p className="text-xs text-gray-500">{formatFileSize(file.size)}</p>
-                  </div>
-                  <button
-                    onClick={() => setFile(null)}
-                    className="p-1 text-gray-500 hover:text-red-400"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Text to Add
-                    </label>
-                    <textarea
-                      value={text}
-                      onChange={(e) => setText(e.target.value)}
-                      placeholder="Enter the text you want to add to the PDF"
-                      rows={3}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 resize-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Page Number
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={pageNumber}
-                      onChange={(e) => setPageNumber(parseInt(e.target.value) || 1)}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Position Mode
-                    </label>
-                    <select
-                      value={positionMode}
-                      onChange={(e) => setPositionMode(e.target.value as PositionMode)}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                    >
-                      <option value="preset">Preset Position</option>
-                      <option value="custom">Custom Coordinates</option>
-                    </select>
-                  </div>
-
-                  {positionMode === "preset" ? (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">
-                        Position
-                      </label>
-                      <select
-                        value={presetPosition}
-                        onChange={(e) => setPresetPosition(e.target.value)}
-                        className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                      >
-                        {presetPositions.map((pos) => (
-                          <option key={pos.value} value={pos.value}>
-                            {pos.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ) : (
-                    <>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-2">
-                          X Position (pts)
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          value={positionX}
-                          onChange={(e) => setPositionX(parseFloat(e.target.value) || 0)}
-                          className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-2">
-                          Y Position (pts)
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          value={positionY}
-                          onChange={(e) => setPositionY(parseFloat(e.target.value) || 0)}
-                          className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                        />
-                      </div>
-                    </>
-                  )}
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Font Size
-                    </label>
-                    <input
-                      type="number"
-                      min="6"
-                      max="120"
-                      value={fontSize}
-                      onChange={(e) => setFontSize(parseInt(e.target.value) || 14)}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Text Color
-                    </label>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="color"
-                        value={color}
-                        onChange={(e) => setColor(e.target.value)}
-                        className="w-12 h-12 bg-gray-800 border border-gray-700 rounded-lg cursor-pointer"
-                      />
-                      <input
-                        type="text"
-                        value={color}
-                        onChange={(e) => setColor(e.target.value)}
-                        className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {error && (
-              <div className="mt-4 bg-red-900/30 border border-red-800 rounded-lg p-3 text-red-300 text-sm">
-                {error}
-              </div>
-            )}
-
-            {isProcessing && (
-              <div className="mt-6">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-gray-400">Adding text to PDF...</span>
-                  <span className="text-sm text-gray-400">{progress}%</span>
-                </div>
-                <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-600 transition-all duration-300"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="mt-6 text-center">
-              <button
-                onClick={handleEdit}
-                disabled={!file || !text.trim() || isProcessing}
-                className="px-8 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium rounded-lg transition-colors"
-              >
-                {isProcessing ? "Adding Text..." : "Add Text"}
-              </button>
-            </div>
-          </>
-        ) : (
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 md:p-8" ref={containerRef}>
+        {result ? (
           <div className="text-center py-8">
             <div className="w-16 h-16 bg-green-600/20 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <svg className="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <h3 className="text-xl font-semibold text-white mb-2">Text Added Successfully!</h3>
-            <p className="text-gray-400 mb-6">Your PDF has been edited with the specified text annotation.</p>
+            <h3 className="text-xl font-semibold text-white mb-2">PDF edited successfully!</h3>
+            <p className="text-gray-400 mb-6">
+              {result.count} {result.count === 1 ? "change was" : "changes were"} applied in place.
+            </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <a
                 href={result.downloadUrl}
@@ -356,20 +377,214 @@ export default function EditPDFPage() {
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
-                Download Edited PDF
+                Download edited PDF
               </a>
               <button
-                onClick={() => {
-                  setFile(null);
-                  setResult(null);
-                  setText("");
-                }}
+                onClick={reset}
                 className="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-medium rounded-lg transition-colors"
               >
-                Edit Another PDF
+                Edit another PDF
               </button>
             </div>
           </div>
+        ) : !fileName ? (
+          <>
+            <FileUploadZone accept=".pdf" multiple={false} maxSizeMB={50} onFilesSelected={(files) => files[0] && loadPdf(files[0])}>
+              <div className="w-16 h-16 bg-blue-600/20 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+              </div>
+              <p className="text-lg text-white mb-2">
+                Drop a PDF here or <span className="text-blue-400">browse</span>
+              </p>
+              <p className="text-sm text-gray-500">Rendered in your browser · click the text to edit · up to 50MB</p>
+            </FileUploadZone>
+            {loading && (
+              <p className="mt-4 text-center text-gray-400" aria-live="polite">
+                Opening PDF…
+              </p>
+            )}
+            {error && (
+              <div className="mt-4 bg-red-900/30 border border-red-800 rounded-lg p-3 text-red-300 text-sm" role="alert">
+                {error}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {/* Toolbar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => goToPage(pageNum - 1)}
+                  disabled={pageNum <= 1}
+                  className="px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-white text-sm rounded-lg transition-colors"
+                  aria-label="Previous page"
+                >
+                  ‹ Prev
+                </button>
+                <span className="text-sm text-gray-300 tabular-nums">
+                  Page {pageNum} / {numPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => goToPage(pageNum + 1)}
+                  disabled={pageNum >= numPages}
+                  className="px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-white text-sm rounded-lg transition-colors"
+                  aria-label="Next page"
+                >
+                  Next ›
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={applyEdits}
+                  disabled={editCount === 0 || applying}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
+                >
+                  {applying ? "Applying…" : `Apply changes & Download${editCount ? ` (${editCount})` : ""}`}
+                </button>
+                <button
+                  type="button"
+                  onClick={reset}
+                  className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm rounded-lg transition-colors"
+                >
+                  New file
+                </button>
+              </div>
+            </div>
+
+            <p className="text-sm text-gray-400 mb-3">
+              Click any word or line to edit it. Edited text is highlighted; press{" "}
+              <span className="text-gray-300">Enter</span> to confirm or <span className="text-gray-300">Esc</span> to cancel.
+            </p>
+
+            {/* Canvas + clickable text layer */}
+            <div className="overflow-auto bg-gray-950 rounded-lg border border-gray-800 p-2 max-h-[72vh]">
+              <div className="relative inline-block select-none" style={{ touchAction: "none" }}>
+                <canvas ref={canvasRef} className="block" />
+                <div className="absolute inset-0">
+                  {textItems.map((item) => {
+                    const ed = edits[item.id];
+                    if (editingId === item.id) {
+                      return (
+                        <input
+                          key={item.id}
+                          autoFocus
+                          defaultValue={edits[item.id]?.newText ?? item.str}
+                          onFocus={(e) => e.currentTarget.select()}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              commitEdit(item, e.currentTarget.value);
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              skipBlurRef.current = true;
+                              setEditingId(null);
+                            }
+                          }}
+                          onBlur={(e) => {
+                            if (skipBlurRef.current) {
+                              skipBlurRef.current = false;
+                              return;
+                            }
+                            commitEdit(item, e.currentTarget.value);
+                          }}
+                          className="absolute z-10 bg-white text-black border border-blue-500 rounded px-1 outline-none"
+                          style={{
+                            left: item.left,
+                            top: item.top,
+                            width: Math.max(item.width + 60, 120),
+                            height: Math.max(item.height + 4, 22),
+                            fontSize: Math.max(9, Math.min(item.height * 0.85, 20)),
+                          }}
+                        />
+                      );
+                    }
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={() => openEditor(item)}
+                        title={ed ? `Changed to: ${ed.newText}` : `Click to edit: ${item.str}`}
+                        className={`absolute cursor-text ${
+                          ed ? "" : "hover:bg-blue-400/20 hover:outline hover:outline-1 hover:outline-blue-400/70"
+                        }`}
+                        style={{ left: item.left, top: item.top, width: item.width, height: item.height }}
+                      >
+                        {ed && (
+                          <div
+                            className="absolute -inset-y-px -left-px flex items-center bg-yellow-200 text-black rounded-sm ring-1 ring-yellow-500 overflow-hidden whitespace-nowrap px-0.5"
+                            style={{
+                              minWidth: item.width + 2,
+                              height: item.height + 2,
+                              fontSize: Math.max(7, Math.min(item.height * 0.82, 20)),
+                              lineHeight: `${item.height}px`,
+                            }}
+                          >
+                            {ed.newText || " "}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {error && (
+              <div className="mt-4 bg-red-900/30 border border-red-800 rounded-lg p-3 text-red-300 text-sm" role="alert">
+                {error}
+              </div>
+            )}
+
+            {/* Pending changes */}
+            {editCount > 0 && (
+              <div className="mt-6 bg-gray-950 border border-gray-800 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm font-medium text-white">
+                    Pending changes <span className="text-gray-500">({editCount})</span>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setEdits({})}
+                    className="text-xs text-gray-400 hover:text-red-400"
+                  >
+                    Clear all
+                  </button>
+                </div>
+                <ul className="space-y-2 max-h-48 overflow-auto">
+                  {editList.map((e) => (
+                    <li key={e.id} className="flex items-center gap-2 text-sm">
+                      <button
+                        type="button"
+                        onClick={() => goToPage(e.page)}
+                        className="text-xs text-gray-500 hover:text-blue-400 shrink-0 w-12 text-left"
+                        title="Go to page"
+                      >
+                        p.{e.page}
+                      </button>
+                      <span className="text-gray-500 line-through truncate max-w-[35%]">{e.oldText}</span>
+                      <span className="text-gray-600">→</span>
+                      <span className="text-green-300 truncate flex-1">{e.newText || "(empty)"}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeEdit(e.id)}
+                        className="p-1 text-gray-500 hover:text-red-400 shrink-0"
+                        aria-label="Remove change"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
         )}
       </div>
     </ToolPageLayout>
