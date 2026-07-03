@@ -7513,7 +7513,7 @@ def detect_document_type(doc: fitz.Document, ocr) -> str:
         return "Other"
 
 
-def extract_invoice_data(doc: fitz.Document, ocr) -> Dict[str, Any]:
+def extract_invoice_data_from_doc(doc: fitz.Document, ocr) -> Dict[str, Any]:
     """Extract invoice metadata using OCR."""
     if len(doc) == 0:
         return {}
@@ -7552,7 +7552,7 @@ def extract_invoice_data(doc: fitz.Document, ocr) -> Dict[str, Any]:
     return data
 
 
-def extract_receipt_data(doc: fitz.Document, ocr) -> Dict[str, Any]:
+def extract_receipt_data_from_doc(doc: fitz.Document, ocr) -> Dict[str, Any]:
     """Extract receipt metadata using OCR."""
     if len(doc) == 0:
         return {}
@@ -7957,7 +7957,7 @@ async def invoice_extractor_upload(
 def extract_invoice_data_from_file(pdf_path: Path, original_name: str, ocr) -> Dict[str, Any]:
     """Extract invoice data from a single file."""
     doc = fitz.open(str(pdf_path))
-    data = extract_invoice_data(doc, ocr)
+    data = extract_invoice_data_from_doc(doc, ocr)
     doc.close()
 
     return {
@@ -8079,7 +8079,7 @@ async def receipt_extractor_upload(
 def extract_receipt_data_from_file(pdf_path: Path, original_name: str, ocr) -> Dict[str, Any]:
     """Extract receipt data from a single file."""
     doc = fitz.open(str(pdf_path))
-    data = extract_receipt_data(doc, ocr)
+    data = extract_receipt_data_from_doc(doc, ocr)
     doc.close()
 
     return {
