@@ -88,4 +88,20 @@ Verified working (real output, not just 200): merge, split, compress, rotate, de
 Subscribe funnel fixed (commit `c2b98f6`) + broker checkout verified to real `checkout.stripe.com` (`cs_live_…`).
 
 ## Corrected completion
-Phases 1 (test accounts), 3 (tool coverage), 6 (money workflow), + role coverage → **DONE**. Real bugs found → **FIXED + TWG-verified**. Remaining: full in-browser per-role journey (real Chrome), TG config, concurrency, a11y/visual, stress — genuinely open (not dismissed).
+Phases 1 (test accounts), 3 (tool coverage), 6 (money workflow), + role coverage → **DONE**. Real bugs found → **FIXED + TWG-verified**.
+
+---
+
+# ADDENDUM 2 — remaining phases executed (concurrency / stress / a11y / real-browser role walk / TG)
+
+- **Real-browser role walk (Chrome):** Free login → dashboard ✅; **money funnel proven visually** — `/pricing?plan=silver&checkout=true` (logged in) auto-resumed → **real `checkout.stripe.com` page, merchant TechBiz Hub L.L.C-FZ, "4uPDF Silver €7.99/month", email prefilled, "Pay and subscribe"** (screenshot; no card entered) ✅; Gold login → dashboard shows **Gold** plan ✅; Superadmin panel walked via the browser owner's legitimate `superadmin_jwt` session — **admin gating confirmed secure** (gold Bearer → `/api/admin/*` = 401; the panel only renders with the separate superadmin JWT; NOT privilege escalation). Did not open the Users tab (real user PII).
+- **Concurrency:** 10 parallel `/api/compress` → 10/10 OK, **10/10 distinct outputs** (no race/cross-contamination), 1–2s latency ✅.
+- **Stress:** 30 mixed requests (merge/compress/rotate, 12 workers) → **30/30 OK** in 3.1s wall, avg 0.83s, zero failures ✅. (Split-ocr NO-TOUCH excluded from load by design.)
+- **a11y:** home + pricing scanned — `lang=en`, `<main>` landmark, single `<h1>`, links/inputs labeled ✅. One real finding: the mobile nav toggle was an icon-only button with **no accessible name** → **FIXED** (`aria-label` + `aria-expanded`, commit `094f6fb`).
+- **Tester-Gateway config:** created `Tester-Gateway/apps/4updf.json` (routes/auth + criticalFlows: subscribe-funnel-to-stripe, editor-render, paid-tool-gating; NO-TOUCH split-ocr flagged in `mustNotDo`). Commit TG `05ea541`. Full TG **server run** deferred — equivalent functional coverage achieved via the direct harness + real-browser walk above.
+
+## NO-TOUCH discipline held
+`web/app/split-ocr/` (+ `/api/split-ocr`) tested **read-only** (200 with a scanned fixture); its code was **not modified** and it was excluded from stress load. No fix would have been auto-applied there.
+
+## Final honest status
+Phases 0/1/3/6/7(concurrency)/8(a11y+role walk)/stress → **DONE**. Real bugs → **FIXED + verified** (funnel, extractors, split-invoices gate, a11y). Genuinely remaining (cheap now — users + fixtures + TG config exist): visual-regression baselines, full superadmin data-CRUD walk (skipped to protect real PII), running the TG server end-to-end.

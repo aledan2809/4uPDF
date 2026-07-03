@@ -55,4 +55,4 @@ At the start of every session opened on this project:
 
 ### Open
 - ~~**G-4UPDF-SPLITINV-TIER**~~ → **Eliminated 2026-07-03** (user: not intentional). `/api/split-invoices` was ungated; added `require_batch_access(get_current_user(credentials))` (Silver/Gold, same gate as `invoice-extractor`). Verified live: anonymous 401, free 403, gold 200.
-- **G-4UPDF-E2E-UI-PHASES** — full in-browser per-role journey walk (real Chrome), Tester-Gateway config, concurrency, a11y/visual-regression, stress — not yet run (genuinely open; test users + fixtures now exist to make this cheap).
+- **G-4UPDF-E2E-UI-PHASES** — full in-browser per-role journey walk (real Chrome), Tester-Gateway config, concurrency, a11y/visual-regression, stress — PARTIAL 2026-07-03 — concurrency (10/10 distinct, no race), stress (30/30 OK), a11y (fixed nav toggle), real-browser role walk (free/gold/superadmin) + money-path-to-Stripe DONE. Remaining: visual-regression baselines + full TG server run + superadmin data-CRUD walk (skipped to protect real PII).
