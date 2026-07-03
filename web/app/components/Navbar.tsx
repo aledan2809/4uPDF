@@ -35,6 +35,7 @@ const toolCategories = [
     name: "Edit",
     href: "#",
     items: [
+      { name: "Edit PDF", href: "/tools/edit-pdf" },
       { name: "Add Watermark", href: "/tools/watermark-pdf" },
       { name: "Add Page Numbers", href: "/tools/add-page-numbers" },
       { name: "Protect PDF", href: "/tools/protect-pdf" },
