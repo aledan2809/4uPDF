@@ -1,6 +1,40 @@
 # Project Status - 4uPDF
 
-Last Updated: 2026-03-19
+Last Updated: 2026-07-03
+
+---
+
+## Current State (Sesiunea 2026-07-03) — Real in-place PDF text editor
+
+**Shipped LIVE to 4updf.com** (VPS2, systemd `4updf-api` + `4updf-web`). Branch `nginx-api-deploy`, commits `f282c63` (editor) → `a4c5675` (nav) → `cb48096` (save UX) → `83f5489` (live-sync). Deployed **surgically** (rsync 2 files + rebuild + restart; NO `git pull` — VPS working tree is dirty, see follow-ups).
+
+### What was wrong
+- `/tools/edit-pdf` was NOT an editor — a coordinate-blind "add text" stamper (old `edit_pdf` in `api.py` + a form-only page). It never read the PDF's text, so users couldn't click existing text to edit it (the exact complaint).
+- Not linked in any nav dropdown.
+
+### What shipped
+- **Backend** `POST /api/edit-pdf-text` (`api.py`): matches each edit (page + click-fraction + old text) to its fitz span, redacts it (detected bg fill; borders preserved via `PDF_REDACT_LINE_ART_NONE`), redraws corrected text using the PDF's **own embedded font** (extracted by xref) at the same baseline/size/colour. Groups multi-edits per span (unmatched substrings skipped — never destroys the run). Encrypted/non-PDF → 400; no-match → 422. Unicode-font fallback. New `_detect_bg_color` helper.
+- **Frontend** `edit-pdf/page.tsx`: real editor — pdf.js renders the page + a clickable text layer from `getTextContent()`; click a word → inline input → **edits save LIVE as you type** (onChange) so the green Save button lights up on the first keystroke; live yellow preview; pending panel with prominent "Save & download PDF"; Esc reverts.
+- **Navbar**: Edit dropdown lists "Edit PDF" first (desktop + mobile).
+
+### Verified (real browser, prod)
+Click-to-edit opens the input; typing enables Save instantly (no Enter); Save → "PDF edited successfully!" → downloaded PDF has the change applied, rest intact. Backend E2E on the user's real doc (Monza Order Form FM.3 date fix) — pixel-perfect, Calibri-Light matched, signatures/borders intact.
+
+### Side deliverable
+Corrected the user's Monza Order Form → `~/Downloads/Centrele Monza-Ares - comanda 3 - CORECTAT FM3.pdf` (FM.3 period `22-Iul-2026 – 21-Iul-2027` + invoice `22-Iun-2026`). Digital signature invalidated by the edit — needs re-signing.
+
+### Open / follow-ups
+- **User's Chrome download engine is hung** (Chrome up 22 days since Jun 11; zero downloads recorded since Jun 24) → downloads silently fail on ALL sites (WhatsApp + 4uPDF). Fix = quit Chrome fully (Cmd+Q) + reopen. NOT a 4uPDF bug.
+- **VPS git cleanup (separate session)**: `/var/www/4updf` working tree dirty (uncommitted proxy fixes + `.bak` files + junk `web/C:/`, `test_ocr.py`); `nginx-api-deploy` is 2 ahead of `master`, origin/master 1 ahead of the VPS. Reconcile so future `git pull` deploys are clean.
+
+### Lessons Learned (sesiunea 2026-07-03)
+- A tool named "Edit PDF" that only stamps text at coordinates ≠ an editor. "It can't find the text" was a MISSING FEATURE, not a bug — read the actual tool code before assuming a small fix.
+- Verify interactive UI in a REAL browser, not just tsc/build. "Click-to-edit works but Save stays disabled" was invisible to typecheck + backend tests; only real typing exposed that edits must commit live (a disabled Save button doesn't commit the open editor, and users won't press Enter).
+- React `onChange` does NOT fire from a programmatic `el.value = x` — use the native value setter + an `input` event to simulate typing in tests; in the app, live-sync on onChange so the UI reacts without Enter/blur.
+- A long-running Chrome (weeks of uptime) can silently break its download subsystem — clean settings/policies but zero downloads → check process uptime + download-history date; restart Chrome.
+- Surgical rsync-deploy (2 files + rebuild + restart) is the safe path when a prod repo's working tree is dirty — avoids a `git pull` clobbering uncommitted live fixes.
+
+---
 
 ## Current State
 
