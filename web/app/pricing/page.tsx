@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
@@ -104,6 +104,7 @@ export default function PricingPage() {
   const [voucherError, setVoucherError] = useState("");
   const [voucherSuccess, setVoucherSuccess] = useState("");
   const { user, getToken } = useAuth();
+  const autoCheckoutRef = useRef(false);
 
   const handleSubscribe = async (planName: string) => {
     if (!user) {
@@ -138,6 +139,21 @@ export default function PricingPage() {
       setLoading(null);
     }
   };
+
+  // Resume checkout automatically after the user returns from signup/login
+  // (Pricing "Subscribe" while logged out sends them to auth with ?plan=,
+  // which redirects back here as ?plan=X&checkout=true). Fires once the user
+  // is known so the purchase intent is never lost.
+  useEffect(() => {
+    if (autoCheckoutRef.current || !user) return;
+    const params = new URLSearchParams(window.location.search);
+    const planParam = params.get("plan");
+    if (params.get("checkout") === "true" && planParam && planParam !== "free") {
+      autoCheckoutRef.current = true;
+      handleSubscribe(planParam);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   const handleRedeemVoucher = async () => {
     if (!user) {

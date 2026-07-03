@@ -140,7 +140,7 @@ function SignupForm() {
             <div className="mt-6 text-center">
               <p className="text-gray-400 text-sm">
                 Already have an account?{" "}
-                <Link href="/login" className="text-blue-400 hover:text-blue-300">
+                <Link href={plan && plan !== "free" ? `/login?plan=${plan}` : "/login"} className="text-blue-400 hover:text-blue-300">
                   Sign in
                 </Link>
               </p>

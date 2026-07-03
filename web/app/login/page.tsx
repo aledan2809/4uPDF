@@ -26,7 +26,15 @@ export default function LoginPage() {
       if (result.role === "superadmin") {
         router.push("/superadmin");
       } else {
-        router.push("/dashboard");
+        // Preserve subscribe intent: if the user arrived here mid-checkout
+        // (?plan=X), resume checkout on Pricing instead of dropping them on the
+        // dashboard — otherwise the purchase is silently lost.
+        const plan = new URLSearchParams(window.location.search).get("plan");
+        if (plan && plan !== "free") {
+          router.push(`/pricing?plan=${plan}&checkout=true`);
+        } else {
+          router.push("/dashboard");
+        }
       }
     } else {
       setError(result.error || "Login failed");
