@@ -5859,9 +5859,11 @@ async def split_invoices(
     file: UploadFile = File(...),
     invoice_pattern: str = Form(r"(?:Factura|Invoice|Nr\.?\s*fact(?:ura)?|Invoice\s*(?:No|Number|#)?)[:\s]*([A-Z0-9\-\/]+)", flags=0),
     dpi: int = Form(150),
-    filename_template: str = Form("{invoice}")
+    filename_template: str = Form("{invoice}"),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """Split multi-invoice PDFs by detecting invoice numbers."""
+    require_batch_access(get_current_user(credentials))
     job_id = uuid.uuid4().hex[:8]
     jobs[job_id] = {"id": job_id, "status": "processing", "progress": 0, "started_at": time.time()}
 

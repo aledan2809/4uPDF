@@ -54,5 +54,5 @@ At the start of every session opened on this project:
 - **G-4UPDF-FUNNEL-DEADEND** — Pricing "Subscribe" for logged-out users dead-ended at auth (no return to checkout; Login dropped the plan; signup Sign-in link dropped the plan). Fix: Pricing auto-resumes checkout on `?plan=X&checkout=true`; Login + signup carry the plan. Commit `c2b98f6`, deployed. **Eliminated 2026-07-03.**
 
 ### Open
-- **G-4UPDF-SPLITINV-TIER** (product decision) — `/api/split-invoices` (api.py:5857) has NO auth/tier gate; anonymous + free users can run it, though it is presented under "Smart Tools" and its sibling `invoice-extractor` is silver+ gated (403 for free). Decide: intentionally free, or add a tier gate to stop a revenue leak. NOT changed unilaterally.
+- ~~**G-4UPDF-SPLITINV-TIER**~~ → **Eliminated 2026-07-03** (user: not intentional). `/api/split-invoices` was ungated; added `require_batch_access(get_current_user(credentials))` (Silver/Gold, same gate as `invoice-extractor`). Verified live: anonymous 401, free 403, gold 200.
 - **G-4UPDF-E2E-UI-PHASES** — full in-browser per-role journey walk (real Chrome), Tester-Gateway config, concurrency, a11y/visual-regression, stress — not yet run (genuinely open; test users + fixtures now exist to make this cheap).
