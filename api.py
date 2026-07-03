@@ -1491,54 +1491,56 @@ async def create_checkout_session(
     billing_period: str = Form("monthly"),  # monthly or annual
     user: Dict[str, Any] = Depends(get_current_user_required)
 ):
-    """Create Stripe checkout session."""
-    stripe_client = get_stripe_client()
-    if not stripe_client:
-        raise HTTPException(status_code=503, detail="Stripe is not configured")
+    """Create a subscription checkout via the central Stripe Checkout Broker.
 
+    Payments are collected by TechBiz Hub (broker company `techbiz-uae`); 4uPDF
+    no longer holds Stripe keys. The broker builds an inline `price_data`
+    subscription from the amount + interval below (no Stripe price IDs needed).
+    Tier activation happens only via the signed broker callback, never here.
+    """
     if plan not in ["bronze", "silver", "gold"]:
         raise HTTPException(status_code=400, detail="Invalid plan")
+    if billing_period not in ("monthly", "annual"):
+        raise HTTPException(status_code=400, detail="Invalid billing period")
 
-    price_id = get_setting(f"{plan}_{billing_period}_price_id")
-    if not price_id:
-        raise HTTPException(status_code=503, detail=f"Price ID not configured for {plan} {billing_period}")
+    cfg = _broker_cfg()
+    if not cfg["project_key"]:
+        raise HTTPException(status_code=503, detail="Billing is not configured")
 
+    limits = PLAN_LIMITS.get(plan) or {}
+    amount = limits.get("price_annual_eur") if billing_period == "annual" else limits.get("price_monthly_eur")
+    if not amount:
+        raise HTTPException(status_code=503, detail=f"Price not configured for {plan} {billing_period}")
+    interval = "year" if billing_period == "annual" else "month"
+
+    body = {
+        "projectSlug": LEGAL_APP_SLUG,
+        "mode": "subscription",
+        "currency": "eur",
+        "lineItems": [{
+            "name": f"4uPDF {plan.title()} — {billing_period.title()}",
+            "description": "4uPDF subscription",
+            "amount": float(amount),
+            "interval": interval,
+            "quantity": 1,
+        }],
+        "customerEmail": user.get("email"),
+        "successUrl": "https://4updf.com/dashboard?success=true&session_id={CHECKOUT_SESSION_ID}",
+        "cancelUrl": "https://4updf.com/pricing?canceled=true",
+        "callbackUrl": "https://4updf.com/api/stripe/broker-callback",
+        "metadata": {"userId": str(user["id"]), "tier": plan, "period": billing_period},
+        "idempotencyKey": f"sub:{user['id']}:{plan}:{billing_period}",
+    }
+    headers = {"Content-Type": "application/json", "X-Project-Key": cfg["project_key"]}
     try:
-        # Get or create Stripe customer
-        customer_id = user.get("stripe_customer_id")
-        if not customer_id:
-            customer = stripe_client.Customer.create(
-                email=user["email"],
-                metadata={"user_id": user["id"]}
-            )
-            customer_id = customer.id
-
-            with db_session() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE users SET stripe_customer_id = ? WHERE id = ?",
-                    (customer_id, user["id"])
-                )
-
-        # Create checkout session
-        session = stripe_client.checkout.Session.create(
-            customer=customer_id,
-            payment_method_types=["card"],
-            line_items=[{"price": price_id, "quantity": 1}],
-            mode="subscription",
-            success_url=f"https://4updf.com/dashboard?success=true&session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url="https://4updf.com/pricing?canceled=true",
-            metadata={
-                "user_id": user["id"],
-                "plan": plan,
-                "billing_period": billing_period
-            }
-        )
-
-        return {"checkout_url": session.url, "session_id": session.id}
-
-    except Exception as e:
-        logger.exception("Processing error")
+        res = _http_post_json(f"{cfg['url']}/api/checkout", body, headers)
+        return {"checkout_url": res.get("url"), "session_id": res.get("sessionId")}
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "ignore")[:200]
+        logger.error("broker checkout failed %s: %s", e.code, detail)
+        raise HTTPException(status_code=502, detail="Could not start checkout. Please try again.")
+    except Exception:
+        logger.exception("broker checkout error")
         raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
 
 
@@ -1634,6 +1636,177 @@ async def create_customer_portal(user: Dict[str, Any] = Depends(get_current_user
     except Exception as e:
         logger.exception("Processing error")
         raise HTTPException(status_code=500, detail="An internal error occurred while processing your request")
+
+
+# ============================================================================
+# Legal Hub (TechBiz Hub) + Stripe Broker callback
+# ============================================================================
+
+import hmac as _hmac
+import hashlib as _hashlib
+import json as _json
+import urllib.request  # noqa: E402  (module-level so create_checkout_session can catch urllib.error.HTTPError)
+import urllib.error  # noqa: E402
+
+LEGAL_APP_SLUG = "4updf"
+
+
+def _legal_cfg() -> Dict[str, str]:
+    return {
+        "url": (get_setting("legal_api_url") or "https://legal.knowbest.ro").rstrip("/"),
+        "key": get_setting("legal_api_key") or "",
+    }
+
+
+def _broker_cfg() -> Dict[str, str]:
+    return {
+        "url": (get_setting("stripe_broker_url") or "https://stripe.knowbest.ro").rstrip("/"),
+        "project_key": get_setting("stripe_broker_project_key") or "",
+        "callback_secret": get_setting("stripe_broker_callback_secret") or "",
+    }
+
+
+def _http_get_json(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 10) -> Dict[str, Any]:
+    req = urllib.request.Request(url, headers=headers or {"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return _json.loads(r.read().decode("utf-8"))
+
+
+def _http_post_json(url: str, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None, timeout: int = 15) -> Dict[str, Any]:
+    data = _json.dumps(payload).encode("utf-8")
+    h = {"Content-Type": "application/json"}
+    h.update(headers or {})
+    req = urllib.request.Request(url, data=data, headers=h, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        body = r.read().decode("utf-8")
+        return _json.loads(body) if body.strip() else {}
+
+
+@app.post("/api/legal/consent")
+async def legal_record_consent(
+    request: Request,
+    doc_type: str = Form("privacy"),
+    consent_text: str = Form(...),
+):
+    """Best-effort anonymous ConsentRecord in the Legal Hub (never blocks the user)."""
+    if doc_type not in ("privacy", "terms", "cookies"):
+        doc_type = "privacy"
+    cfg = _legal_cfg()
+    try:
+        doc = _http_get_json(f"{cfg['url']}/api/v1/public/legal/{LEGAL_APP_SLUG}/{doc_type}")
+        version_id = ((doc.get("version") or {}).get("id"))
+        if not version_id:
+            return {"ok": False, "reason": "no_version"}
+        headers = {"Content-Type": "application/json"}
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            headers["x-forwarded-for"] = xff
+        ua = request.headers.get("user-agent")
+        if ua:
+            headers["user-agent"] = ua
+        res = _http_post_json(
+            f"{cfg['url']}/api/v1/consents/record",
+            {
+                "appSlug": LEGAL_APP_SLUG,
+                "documentVersionId": version_id,
+                "consentText": (consent_text or "")[:2000],
+                "method": "IN_APP",
+            },
+            headers,
+        )
+        return {"ok": True, "id": res.get("id")}
+    except Exception as e:
+        logger.warning("legal consent record failed: %s", e)
+        return {"ok": False}
+
+
+@app.post("/api/legal/dsr")
+async def legal_submit_dsr(
+    email: str = Form(...),
+    type: str = Form(...),
+    description: str = Form(""),
+):
+    """Forward a GDPR data-subject request to the Legal Hub (TechBiz Hub controller)."""
+    req_type = (type or "").lower()
+    if req_type not in ("export", "delete", "rectify"):
+        raise HTTPException(status_code=400, detail="Invalid request type")
+    cfg = _legal_cfg()
+    if not cfg["key"]:
+        raise HTTPException(status_code=503, detail="Data-subject requests are not configured")
+    try:
+        res = _http_post_json(
+            f"{cfg['url']}/api/v1/dsr/submit",
+            {"email": email, "type": req_type, "appSlug": LEGAL_APP_SLUG, "description": description or ""},
+            {"Content-Type": "application/json", "x-legal-api-key": cfg["key"]},
+        )
+        return {"ok": True, "requestId": res.get("requestId")}
+    except Exception:
+        logger.exception("DSR submit failed")
+        raise HTTPException(status_code=502, detail="Could not submit your request. Please try again.")
+
+
+def _broker_event_is_new(event_id: str) -> bool:
+    """Idempotency: returns True the FIRST time an eventId is seen, False afterward."""
+    if not event_id:
+        return True
+    try:
+        with db_session() as conn:
+            cur = conn.cursor()
+            cur.execute("CREATE TABLE IF NOT EXISTS broker_events (event_id TEXT PRIMARY KEY, seen_at TEXT)")
+            cur.execute("INSERT OR IGNORE INTO broker_events (event_id, seen_at) VALUES (?, ?)",
+                        (event_id, datetime.utcnow().isoformat()))
+            return cur.rowcount > 0
+    except Exception:
+        logger.exception("broker event dedup failed")
+        return True  # fail-open: better to double-apply an idempotent tier set than to drop it
+
+
+@app.post("/api/stripe/broker-callback")
+async def broker_callback(request: Request):
+    """Signed callback from the Stripe Checkout Broker — the ONLY place tiers activate."""
+    cfg = _broker_cfg()
+    raw = await request.body()
+    sig = request.headers.get("x-broker-signature", "")
+    secret = cfg["callback_secret"]
+    if not secret:
+        raise HTTPException(status_code=503, detail="Broker callback not configured")
+    expected = _hmac.new(secret.encode("utf-8"), raw, _hashlib.sha256).hexdigest()
+    if not _hmac.compare_digest(expected, sig or ""):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    try:
+        payload = _json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid payload")
+
+    event = payload.get("event")
+    meta = payload.get("metadata") or {}
+    user_id = meta.get("userId")
+    tier = meta.get("tier")
+    sub_id = payload.get("stripeSubscriptionId")
+    event_id = payload.get("eventId")
+
+    if not _broker_event_is_new(event_id):
+        return {"received": True, "dedup": True}
+
+    now = datetime.utcnow().isoformat()
+    with db_session() as conn:
+        cur = conn.cursor()
+        if event in ("subscription.activated", "subscription.renewed", "payment.succeeded") and user_id and tier:
+            cur.execute(
+                "UPDATE users SET plan = ?, base_plan = ?, stripe_subscription_id = ?, "
+                "subscription_status = 'active', updated_at = ? WHERE id = ?",
+                (tier, tier, sub_id, now, user_id),
+            )
+        elif event == "subscription.payment_failed" and user_id:
+            cur.execute("UPDATE users SET subscription_status = 'past_due', updated_at = ? WHERE id = ?", (now, user_id))
+        elif event in ("subscription.canceled", "payment.expired", "payment.failed") and user_id:
+            cur.execute(
+                "UPDATE users SET plan = 'free', base_plan = 'free', subscription_status = 'canceled', "
+                "stripe_subscription_id = NULL, updated_at = ? WHERE id = ?",
+                (now, user_id),
+            )
+    return {"received": True}
 
 
 # ============================================================================

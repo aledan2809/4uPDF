@@ -28,6 +28,14 @@ export default function CookieConsent() {
     // Let the first-party pageview tracker record this landing now that analytics
     // is allowed (it skipped on load before consent).
     try { window.dispatchEvent(new Event('4u:consent')); } catch { /* noop */ }
+    // Record an affirmative consent in the Legal Hub (TechBiz Hub controller).
+    // Best-effort, anonymous, fire-and-forget — never blocks the user.
+    try {
+      const fd = new FormData();
+      fd.append('doc_type', 'cookies');
+      fd.append('consent_text', 'Accepted all cookies (necessary + analytics) via the cookie banner on 4updf.com.');
+      fetch('/api/legal/consent', { method: 'POST', body: fd }).catch(() => {});
+    } catch { /* noop */ }
   };
 
   const acceptNecessary = () => {
