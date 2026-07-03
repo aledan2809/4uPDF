@@ -443,9 +443,9 @@ export default function EditPDFPage() {
                   type="button"
                   onClick={applyEdits}
                   disabled={editCount === 0 || applying}
-                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
+                  className="px-5 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
                 >
-                  {applying ? "Applying…" : `Apply changes & Download${editCount ? ` (${editCount})` : ""}`}
+                  {applying ? "Saving…" : `Save & Download${editCount ? ` (${editCount})` : ""}`}
                 </button>
                 <button
                   type="button"
@@ -458,8 +458,9 @@ export default function EditPDFPage() {
             </div>
 
             <p className="text-sm text-gray-400 mb-3">
-              Click any word or line to edit it. Edited text is highlighted; press{" "}
-              <span className="text-gray-300">Enter</span> to confirm or <span className="text-gray-300">Esc</span> to cancel.
+              Click any word or line to edit it, then press <span className="text-gray-300">Enter</span> to confirm
+              (or <span className="text-gray-300">Esc</span> to cancel). When you&apos;re done, click the green{" "}
+              <span className="text-green-400 font-medium">Save &amp; Download</span> button to get your edited PDF.
             </p>
 
             {/* Canvas + clickable text layer */}
@@ -555,6 +556,17 @@ export default function EditPDFPage() {
                     Clear all
                   </button>
                 </div>
+                <button
+                  type="button"
+                  onClick={applyEdits}
+                  disabled={applying}
+                  className="w-full mb-4 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold rounded-lg transition-colors inline-flex items-center justify-center gap-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  {applying ? "Saving…" : `Save & download PDF (${editCount} ${editCount === 1 ? "change" : "changes"})`}
+                </button>
                 <ul className="space-y-2 max-h-48 overflow-auto">
                   {editList.map((e) => (
                     <li key={e.id} className="flex items-center gap-2 text-sm">
