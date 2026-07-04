@@ -1,6 +1,28 @@
 # Project Status - 4uPDF
 
-Last Updated: 2026-07-03
+Last Updated: 2026-07-04
+
+---
+
+## Current State (Sesiunea 2026-07-04) — True E2E + SUMMER 2026 plan restructure
+
+**Continuare directă a sesiunii 2026-07-03 (editor + Legal + broker).** Toate LIVE + committed + pushed.
+
+### Livrat
+- **Subscribe funnel fix** (`c2b98f6`) — 3 rupturi (Pricing auto-resume, login carries plan, signup Sign-in carries plan). Verificat vizual la Stripe checkout (TechBiz Hub).
+- **True E2E Full Audit** (report `Reports/TRUE-E2E-FULL-2026-07-03.md`): 3 useri de rol + 13 fixture docs create; 37 tool-uri exersate (35 pass); **2 bug-uri reale reparate** — invoice/receipt-extractor 500 (shadowed function, `8d7de5b`) + **split-invoices revenue leak gated** (`b342bb7`); concurrency/stress pass; a11y nav-toggle fix (`094f6fb`).
+- **SUMMER 2026 plan restructure** — Free/PRO/Business + SUMMER HOT strike-through (`39dc095` PLAN_LIMITS + server-side free-daily-task-cap middleware; `231855a` Pricing UI). PRO(silver) €4.99/49.90, Business(gold) €12.99/129.90; Free 30MB + **3 tasks/day enforced** (was never enforced). `/api/split-ocr` (NO-TOUCH) excluded from the cap. Verified: free 3→429, gold unlimited, checkout €4.99→Stripe.
+- Test users in `Master/credentials/4updf.env` (`E2E_*`). Broker mapping `4updf→techbiz-uae` (live) + Legal AppEntityMapping `4updf→TechBiz Hub` (id `cmr52062o…`).
+
+### Pending (NEXT SESSION — B+C+D, all approved)
+- **B** — MA conversion campaign: 20% coupon on PRO (€3.99/mo, €39.90/yr) for the 8 real users (registered ≤ 4 Jul 2026), EN, "early-supporter" framing (NO per-user op counts — 0/8 have logged ops), valid until 31 Jul 2026. Deliver DRAFT → send only on explicit OK.
+- **C** — per-function reels, EN-first, via MA REEL/VIDEO pipeline (real-operation footage + blur, Edit tool first; RO 2nd language later). No competitor comparison (L291).
+- **D** — proactive "approaching daily limit" upgrade nudge in tools + fix the per-user usage-tracking gap (logged-in ops not attributed to `user_id`).
+
+### Lessons Learned (sesiunea 2026-07-04)
+- **L290** — "heavy infra" is not a valid reason to skip E2E phases (provisioning users + generating fixtures IS the audit).
+- **L291** — never publicly compare our products vs named competitors (⚠️ number collides with a concurrent session's L291 "export .docx diacritics" — reconcile numbering later).
+- **L292** — standard ecosystem pricing scheme: annual = monthly ×10, promo = struck regular price (AVE strike-through), display-name ≠ internal-tier-key.
 
 ---
 
