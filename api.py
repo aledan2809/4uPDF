@@ -1421,6 +1421,7 @@ def cas_render_proxy(
     n: str = "",
     source: str = "4updf",
     visitor: str = "",
+    lang: str = "",
 ):
     """Server-side proxy for the CAS (Carusel de Ads) render endpoint in
     MarketingAutomation (ma.techbiz.ae) — mirrors the TeInformez integration.
@@ -1451,6 +1452,9 @@ def cas_render_proxy(
 
     cas_base = get_setting("cas_base", os.environ.get("CAS_BASE", "https://ma.techbiz.ae")).rstrip("/")
     params = {"placement": placement[:60], "format": "html", "source": (source or "4updf")[:60]}
+    if lang:
+        # Language match: MA serves only same-language (or language-agnostic) ads for this lang.
+        params["lang"] = lang[:10]
     if n and n.isdigit():
         params["n"] = n[:2]
     if visitor:

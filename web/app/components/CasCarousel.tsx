@@ -85,6 +85,10 @@ export default function CasCarousel({
     if (typeof index === "number") params.set("n", String(index));
     const visitor = readVisitorToken();
     if (visitor) params.set("visitor", visitor);
+    // Match the ad language to the page so an EN surface never gets a RO ad
+    // (MA's /api/cas/render filters on this; absent lang = no filter = the bug we're fixing).
+    const pageLang = (typeof document !== "undefined" && document.documentElement.lang) || "en";
+    params.set("lang", pageLang);
 
     fetch(`/api/cas/render?${params}`, { cache: "no-store", credentials: "omit" })
       .then((res) => (res.ok && res.status !== 204 ? res.text() : ""))
