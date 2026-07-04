@@ -9,58 +9,46 @@ import { useAuth } from "../lib/auth";
 const plans = [
   {
     name: "Free",
+    tier: "free",
     priceMonthly: 0,
     priceAnnual: 0,
+    regularMonthly: 0,
+    regularAnnual: 0,
+    summerHot: false,
     period: "forever",
     description: "Perfect for occasional use",
     features: [
       "All basic PDF tools",
-      "Up to 50MB file size",
+      "3 tasks per day",
+      "Up to 30MB file size",
       "200 pages per day",
       "Standard processing speed",
       "Includes ads",
     ],
-    limitations: ["No batch processing", "No smart tools"],
+    limitations: ["No batch processing", "No smart tools", "No OCR"],
     cta: "Get Started Free",
     href: "/",
     popular: false,
     requiresLogin: false,
   },
   {
-    name: "Bronze",
-    priceMonthly: 3.99,
-    priceAnnual: 38.30,
+    name: "PRO",
+    tier: "silver",
+    priceMonthly: 4.99,
+    priceAnnual: 49.90,
+    regularMonthly: 5.99,
+    regularAnnual: 59.90,
+    summerHot: true,
     period: "per month",
-    description: "For regular PDF users",
-    features: [
-      "All basic PDF tools",
-      "Up to 150MB file size",
-      "500 pages per day",
-      "Faster processing",
-      "No ads",
-      "Batch processing",
-      "Email support",
-    ],
-    limitations: [],
-    cta: "Subscribe",
-    href: "/signup?plan=bronze",
-    popular: false,
-    requiresLogin: true,
-  },
-  {
-    name: "Silver",
-    priceMonthly: 7.99,
-    priceAnnual: 76.70,
-    period: "per month",
-    description: "Best for professionals",
+    description: "Everything you need, unlimited",
     features: [
       "All PDF tools + Smart Tools",
-      "Up to 300MB file size",
+      "Unlimited tasks",
+      "Up to 200MB file size",
       "1000 pages per day",
-      "Priority processing",
       "No ads",
-      "Batch processing",
-      "Smart automation tools",
+      "Batch processing (up to 20 files)",
+      "OCR + Smart automation tools",
       "Priority email support",
     ],
     limitations: [],
@@ -70,20 +58,21 @@ const plans = [
     requiresLogin: true,
   },
   {
-    name: "Gold",
-    priceMonthly: 17.99,
-    priceAnnual: 172.70,
+    name: "Business",
+    tier: "gold",
+    priceMonthly: 12.99,
+    priceAnnual: 129.90,
+    regularMonthly: 14.99,
+    regularAnnual: 149.90,
+    summerHot: true,
     period: "per month",
-    description: "For power users",
+    description: "For teams & power users",
     features: [
-      "All PDF + Smart Tools",
+      "Everything in PRO",
+      "Unlimited tasks",
       "Up to 500MB file size",
       "Unlimited pages",
-      "Fastest processing",
-      "No ads",
-      "Batch processing",
-      "Smart automation tools",
-      "Full API access",
+      "Full API access (10k calls/mo)",
       "Workflow automation",
       "Priority support",
     ],
@@ -201,6 +190,13 @@ export default function PricingPage() {
     return `€${price.toFixed(2)}${suffix}`;
   };
 
+  const getRegularPrice = (plan: typeof plans[0]) => {
+    if (!plan.summerHot) return null;
+    const price = billingPeriod === "monthly" ? plan.regularMonthly : plan.regularAnnual;
+    const suffix = billingPeriod === "monthly" ? "/mo" : "/yr";
+    return `€${price.toFixed(2)}${suffix}`;
+  };
+
   const getSavings = (plan: typeof plans[0]) => {
     if (plan.priceMonthly === 0) return null;
     const monthlyTotal = plan.priceMonthly * 12;
@@ -241,12 +237,12 @@ export default function PricingPage() {
                     : "text-gray-400 hover:text-white"
                 }`}
               >
-                Annual <span className="text-green-400 ml-1">Save 20%</span>
+                Annual <span className="text-green-400 ml-1">2 months free</span>
               </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
             {plans.map((plan) => (
               <div
                 key={plan.name}
@@ -266,7 +262,17 @@ export default function PricingPage() {
 
                 <div className="text-center mb-6">
                   <h2 className="text-xl font-bold text-white mb-2">{plan.name}</h2>
-                  <div className="flex items-baseline justify-center gap-1">
+                  {plan.summerHot && (
+                    <div className="mb-2">
+                      <span className="inline-block bg-orange-500/20 text-orange-400 text-xs font-bold px-2.5 py-0.5 rounded-full">
+                        🔥 SUMMER HOT · until Aug 31, 2026
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex items-baseline justify-center gap-2">
+                    {getRegularPrice(plan) && (
+                      <span className="text-lg font-medium text-red-400 line-through">{getRegularPrice(plan)}</span>
+                    )}
                     <span className="text-4xl font-bold text-white">{getPrice(plan)}</span>
                   </div>
                   {billingPeriod === "annual" && getSavings(plan) && (
@@ -318,15 +324,15 @@ export default function PricingPage() {
 
                 {plan.requiresLogin ? (
                   <button
-                    onClick={() => handleSubscribe(plan.name)}
-                    disabled={loading === plan.name}
+                    onClick={() => handleSubscribe(plan.tier)}
+                    disabled={loading === plan.tier}
                     className={`block w-full py-3 px-4 text-center font-medium rounded-lg transition-colors ${
                       plan.popular
                         ? "bg-blue-600 hover:bg-blue-700 text-white disabled:bg-blue-600/50"
                         : "bg-gray-800 hover:bg-gray-700 text-white border border-gray-700 disabled:bg-gray-800/50"
                     }`}
                   >
-                    {loading === plan.name ? "Loading..." : plan.cta}
+                    {loading === plan.tier ? "Loading..." : plan.cta}
                   </button>
                 ) : (
                   <Link
