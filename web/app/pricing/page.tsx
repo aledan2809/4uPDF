@@ -89,6 +89,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3099";
 export default function PricingPage() {
   const [billingPeriod, setBillingPeriod] = useState<"monthly" | "annual">("monthly");
   const [loading, setLoading] = useState<string | null>(null);
+  const [couponCode, setCouponCode] = useState<string | null>(null);
   const [voucherCode, setVoucherCode] = useState("");
   const [voucherError, setVoucherError] = useState("");
   const [voucherSuccess, setVoucherSuccess] = useState("");
@@ -106,6 +107,7 @@ export default function PricingPage() {
       const formData = new FormData();
       formData.append("plan", planName.toLowerCase());
       formData.append("billing_period", billingPeriod);
+      if (couponCode) formData.append("coupon", couponCode);
 
       const response = await fetch(`${API_URL}/api/stripe/create-checkout`, {
         method: "POST",
@@ -128,6 +130,15 @@ export default function PricingPage() {
       setLoading(null);
     }
   };
+
+  // Campaign coupon + billing preselect from the email CTA (?coupon=EARLY20&billing=annual).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const c = params.get("coupon");
+    if (c) setCouponCode(c.trim().toUpperCase());
+    const b = params.get("billing");
+    if (b === "annual" || b === "monthly") setBillingPeriod(b);
+  }, []);
 
   // Resume checkout automatically after the user returns from signup/login
   // (Pricing "Subscribe" while logged out sends them to auth with ?plan=,
@@ -240,6 +251,14 @@ export default function PricingPage() {
                 Annual <span className="text-green-400 ml-1">2 months free</span>
               </button>
             </div>
+
+            {couponCode === "EARLY20" && (
+              <div className="mt-6 flex justify-center">
+                <div className="inline-flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm font-medium px-4 py-2 rounded-lg">
+                  🎁 Early-Supporter offer applied — 20% off PRO for your first year, added at checkout.
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">

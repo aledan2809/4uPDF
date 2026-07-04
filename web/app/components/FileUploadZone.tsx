@@ -20,6 +20,8 @@ export default function FileUploadZone({
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [limits, setLimits] = useState<PlanLimits | null>(null);
+  const [tasksRemaining, setTasksRemaining] = useState<number | null>(null);
+  const [tasksLimit, setTasksLimit] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { getToken } = useAuth();
 
@@ -29,6 +31,8 @@ export default function FileUploadZone({
       try {
         const status = await getUsageStatus(getToken());
         setLimits(status.limits);
+        setTasksRemaining(typeof status.tasks_remaining === "number" ? status.tasks_remaining : null);
+        setTasksLimit(typeof status.tasks_limit === "number" ? status.tasks_limit : null);
       } catch {
         // Use default free limits
         setLimits({
@@ -46,6 +50,10 @@ export default function FileUploadZone({
 
   // Use plan-based limit or prop override
   const effectiveMaxSizeMB = maxSizeMB ?? limits?.max_file_size_mb ?? 50;
+
+  // Proactive "approaching daily limit" nudge — free tier only (tasksLimit === -1 = unlimited/paid).
+  const showTaskNudge =
+    tasksLimit !== null && tasksLimit > 0 && tasksRemaining !== null && tasksRemaining <= 1;
 
   const validateFiles = (files: File[]): File[] => {
     const maxBytes = effectiveMaxSizeMB * 1024 * 1024;
@@ -82,6 +90,22 @@ export default function FileUploadZone({
 
   return (
     <div className="space-y-4">
+      {showTaskNudge && (
+        <div className="bg-amber-900/30 border border-amber-700/60 rounded-lg p-3 text-amber-200 text-sm flex items-center justify-between gap-3">
+          <span>
+            {tasksRemaining === 0
+              ? `You've used all ${tasksLimit} free tasks today.`
+              : `Only ${tasksRemaining} free task${tasksRemaining === 1 ? "" : "s"} left today.`}{" "}
+            Upgrade to PRO for unlimited processing.
+          </span>
+          <a
+            href="/pricing"
+            className="shrink-0 bg-amber-500 hover:bg-amber-400 text-amber-950 font-medium px-3 py-1.5 rounded-md whitespace-nowrap"
+          >
+            Upgrade
+          </a>
+        </div>
+      )}
       <div
         onDragOver={(e) => {
           e.preventDefault();

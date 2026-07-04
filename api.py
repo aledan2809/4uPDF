@@ -686,6 +686,28 @@ def _record_free_task(user_id: Optional[str], anon_id: Optional[str]) -> None:
         )
 
 
+def _operation_from_path(path: str) -> str:
+    """Derive a clean operation name from an /api/<tool> path (e.g. '/api/merge-pdf' -> 'merge-pdf')."""
+    op = path[5:] if path.startswith("/api/") else path
+    op = op.strip("/").split("/")[0] or "operation"
+    return op[:64]
+
+
+def _record_operation_usage(user_id: Optional[str], anon_id: Optional[str], operation: str, file_size_bytes: int) -> None:
+    """Attribute a completed tool operation to the user/visitor (real op name + who ran it + size).
+
+    Runs for ALL tiers on success — previously authenticated/paid operations were never recorded
+    against a user_id (only the free-tier 'free_task' cap counter carried an id). Best-effort:
+    callers wrap in try/except so a logging failure never affects the response.
+    """
+    with db_session() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO usage_history (id, user_id, anonymous_id, operation, pages_processed, file_size_bytes) VALUES (?,?,?,?,0,?)",
+            (uuid.uuid4().hex, user_id, anon_id, operation, int(file_size_bytes or 0)),
+        )
+
+
 @app.middleware("http")
 async def free_daily_task_cap(request: Request, call_next):
     """Server-side enforcement of the Free-tier daily task cap.
@@ -705,31 +727,45 @@ async def free_daily_task_cap(request: Request, call_next):
     except Exception:
         return await call_next(request)
 
-    if cap == -1:
-        return await call_next(request)  # paid / unlimited
-
     uid = user["id"] if user else None
     anon = None if user else ("ip:" + hashlib.sha256(get_client_ip(request).encode()).hexdigest()[:24])
-    try:
-        used = _free_tasks_today(uid, anon)
-    except Exception:
-        return await call_next(request)  # fail-open on counting error
 
-    if used >= cap:
-        return _JSONResponse(status_code=429, content={
-            "detail": f"You've reached the free daily limit of {cap} tasks. Upgrade to PRO for unlimited — SUMMER HOT €4.99/mo.",
-            "reason": "daily_task_limit",
-            "upgrade": True,
-            "limit": cap,
-            "used": used,
-        })
+    # Free-tier daily cap gate (paid/unlimited tiers have cap == -1 → no gate).
+    if cap != -1:
+        try:
+            used = _free_tasks_today(uid, anon)
+        except Exception:
+            used = None  # fail-open on counting error — never block a request
+        if used is not None and used >= cap:
+            return _JSONResponse(status_code=429, content={
+                "detail": f"You've reached the free daily limit of {cap} tasks. Upgrade to PRO for unlimited — SUMMER HOT €4.99/mo.",
+                "reason": "daily_task_limit",
+                "upgrade": True,
+                "limit": cap,
+                "used": used,
+            })
 
     resp = await call_next(request)
     if 200 <= resp.status_code < 300:
-        try:
-            _record_free_task(uid, anon)
-        except Exception:
-            pass
+        # Free-tier cap counter (unchanged): only the free tier ticks a 'free_task' row.
+        if cap != -1:
+            try:
+                _record_free_task(uid, anon)
+            except Exception:
+                pass
+        # Attribute the real operation to the user/visitor (ALL tiers). Skip non-tool POSTs
+        # (e.g. /api/track/*) that reach the middleware but aren't real tools — keeps the
+        # attribution data clean without touching the cap counter above.
+        op = _operation_from_path(path)
+        if op != "track":
+            try:
+                size = int(request.headers.get("content-length") or 0)
+            except Exception:
+                size = 0
+            try:
+                _record_operation_usage(uid, anon, op, size)
+            except Exception:
+                pass
     return resp
 
 def check_and_update_voucher_expiry(user_id: str) -> None:
@@ -1265,6 +1301,11 @@ async def get_usage_status(
         pages_used = usage["pages_today"] if usage else 0
         pages_limit = limits["pages_per_day"]
 
+        # Daily task cap (for the proactive "approaching limit" nudge). -1 = unlimited (paid).
+        tasks_limit = limits.get("tasks_per_day", -1)
+        tasks_used = _free_tasks_today(user["id"], None) if tasks_limit != -1 else 0
+        tasks_remaining = -1 if tasks_limit == -1 else max(0, tasks_limit - tasks_used)
+
         return {
             "authenticated": True,
             "user_id": user["id"],
@@ -1273,6 +1314,9 @@ async def get_usage_status(
             "pages_used_today": pages_used,
             "pages_limit": pages_limit,
             "limit_reached": pages_limit != -1 and pages_used >= pages_limit,
+            "tasks_used_today": tasks_used,
+            "tasks_limit": tasks_limit,
+            "tasks_remaining": tasks_remaining,
             "has_ads": limits["has_ads"],
             "limits": limits
         }
@@ -1293,12 +1337,21 @@ async def get_usage_status(
         pages_used = anon_user["pages_used_today"] if anon_user else 0
         limits = PLAN_LIMITS["free"]
 
+        # Daily task cap for the nudge — mirrors the middleware's anon key (ip hash).
+        tasks_limit = limits.get("tasks_per_day", -1)
+        anon_cap_id = "ip:" + hashlib.sha256(ip.encode()).hexdigest()[:24]
+        tasks_used = _free_tasks_today(None, anon_cap_id) if tasks_limit != -1 else 0
+        tasks_remaining = -1 if tasks_limit == -1 else max(0, tasks_limit - tasks_used)
+
         return {
             "authenticated": False,
             "plan": "free",
             "pages_used_today": pages_used,
             "pages_limit": limits["pages_per_day"],
             "limit_reached": pages_used >= limits["pages_per_day"],
+            "tasks_used_today": tasks_used,
+            "tasks_limit": tasks_limit,
+            "tasks_remaining": tasks_remaining,
             "has_ads": limits["has_ads"],
             "limits": limits
         }
@@ -1589,10 +1642,50 @@ async def get_plans():
     }
 
 
+# --- Campaign coupons (server-authoritative; the client only sends the CODE) ---
+# The broker creates the Stripe coupon from percentOff + duration and attaches it
+# to the checkout session. We never trust a client-supplied discount amount.
+_CAMPAIGN_COUPONS = {
+    # Early-Supporter conversion campaign (2026-07). 20% off PRO for the first year.
+    "EARLY20": {
+        "percentOff": 20,
+        "duration": "repeating",
+        "durationInMonths": 12,
+        "validUntil": "2026-07-31",   # last day the offer can be claimed (UTC)
+        "plans": {"silver"},          # PRO only
+    },
+}
+
+
+def _resolve_campaign_coupon(code: Optional[str], plan: str) -> Optional[Dict[str, Any]]:
+    """Map a campaign code to a broker coupon spec, enforcing validity + plan scope.
+
+    Returns None (full price) for unknown/expired/out-of-scope codes — never raises,
+    so a bad code degrades gracefully to the normal price instead of blocking checkout.
+    """
+    if not code:
+        return None
+    spec = _CAMPAIGN_COUPONS.get(code.strip().upper())
+    if not spec:
+        return None
+    try:
+        if datetime.utcnow().date() > datetime.strptime(spec["validUntil"], "%Y-%m-%d").date():
+            return None
+    except Exception:
+        return None
+    if spec.get("plans") and plan not in spec["plans"]:
+        return None
+    coupon: Dict[str, Any] = {"percentOff": spec["percentOff"], "duration": spec["duration"]}
+    if spec["duration"] == "repeating":
+        coupon["durationInMonths"] = spec["durationInMonths"]
+    return coupon
+
+
 @app.post("/api/stripe/create-checkout")
 async def create_checkout_session(
     plan: str = Form(...),
     billing_period: str = Form("monthly"),  # monthly or annual
+    coupon: Optional[str] = Form(None),      # campaign code (e.g. EARLY20); server-validated
     user: Dict[str, Any] = Depends(get_current_user_required)
 ):
     """Create a subscription checkout via the central Stripe Checkout Broker.
@@ -1635,6 +1728,13 @@ async def create_checkout_session(
         "metadata": {"userId": str(user["id"]), "tier": plan, "period": billing_period},
         "idempotencyKey": f"sub:{user['id']}:{plan}:{billing_period}",
     }
+    campaign_coupon = _resolve_campaign_coupon(coupon, plan)
+    if campaign_coupon:
+        code = (coupon or "").strip().upper()
+        body["coupon"] = campaign_coupon
+        body["metadata"]["coupon"] = code
+        # Distinct idempotency so a discounted checkout isn't deduped to a prior full-price session.
+        body["idempotencyKey"] = f"{body['idempotencyKey']}:{code}"
     headers = {"Content-Type": "application/json", "X-Project-Key": cfg["project_key"]}
     try:
         res = _http_post_json(f"{cfg['url']}/api/checkout", body, headers)
