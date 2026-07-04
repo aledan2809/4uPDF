@@ -365,8 +365,9 @@ def init_database():
 
 PLAN_LIMITS = {
     "free": {
-        "max_file_size_mb": 50,
+        "max_file_size_mb": 30,
         "pages_per_day": 200,
+        "tasks_per_day": 3,  # SUMMER 2026 restructure: free capped at 3 tasks/day
         "has_ads": True,
         "batch_processing": False,
         "smart_tools": False,
@@ -375,38 +376,43 @@ PLAN_LIMITS = {
         "price_monthly_eur": 0,
         "price_annual_eur": 0,
     },
+    # bronze retained for grandfathered subscribers only (not shown on Pricing)
     "bronze": {
         "max_file_size_mb": 150,
         "pages_per_day": 500,
+        "tasks_per_day": -1,  # unlimited
         "has_ads": False,
         "batch_processing": True,
         "smart_tools": False,
         "api_access": False,
         "api_calls_per_month": 0,
         "price_monthly_eur": 3.99,
-        "price_annual_eur": 38.30,  # ~20% discount
+        "price_annual_eur": 38.30,
     },
+    # silver == "PRO" (display name); gold == "Business"
     "silver": {
-        "max_file_size_mb": 300,
+        "max_file_size_mb": 200,
         "pages_per_day": 1000,
+        "tasks_per_day": -1,  # unlimited
         "has_ads": False,
         "batch_processing": True,
         "smart_tools": True,
         "api_access": False,
         "api_calls_per_month": 0,
-        "price_monthly_eur": 7.99,
-        "price_annual_eur": 76.70,  # ~20% discount
+        "price_monthly_eur": 4.99,          # SUMMER HOT (regular 5.99)
+        "price_annual_eur": 49.90,          # monthly x10 (2 months free)
     },
     "gold": {
         "max_file_size_mb": 500,
         "pages_per_day": -1,  # unlimited
+        "tasks_per_day": -1,  # unlimited
         "has_ads": False,
         "batch_processing": True,
         "smart_tools": True,
         "api_access": True,
         "api_calls_per_month": 10000,
-        "price_monthly_eur": 17.99,
-        "price_annual_eur": 172.70,  # ~20% discount
+        "price_monthly_eur": 12.99,         # SUMMER HOT (regular 14.99)
+        "price_annual_eur": 129.90,         # monthly x10 (2 months free)
     },
     "custom": {
         "max_file_size_mb": 500,
@@ -627,6 +633,104 @@ def check_user_limits(
         }
 
     return {"allowed": True, "pages_used": pages_used, "limits": limits}
+
+
+# ============================================================================
+# Free daily task cap (server-side enforcement) — SUMMER 2026 restructure
+# ============================================================================
+from fastapi.responses import JSONResponse as _JSONResponse
+
+# POST /api/* endpoints that are NOT metered tools (auth, billing, legal, admin,
+# housekeeping) + the NO-TOUCH CRITIC split-ocr module (excluded so the cap
+# never changes its behaviour).
+_NON_TOOL_API_PREFIXES = (
+    "/api/auth", "/api/legal", "/api/stripe", "/api/admin", "/api/superadmin",
+    "/api/voucher", "/api/plans", "/api/check-limits", "/api/download",
+    "/api/analytics", "/api/heartbeat", "/api/jobs", "/api/job", "/api/api-keys",
+    "/api/browse", "/api/defaults", "/api/newsletter", "/api/cas",
+    "/api/split-ocr",  # NO-TOUCH CRITIC module — never metered by this cap
+)
+
+
+def _user_from_bearer(request: Request) -> Optional[Dict[str, Any]]:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    payload = decode_jwt_token(auth.split(" ", 1)[1])
+    if not payload:
+        return None
+    with db_session() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM users WHERE id = ?", (payload.get("sub"),))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def _free_tasks_today(user_id: Optional[str], anon_id: Optional[str]) -> int:
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    with db_session() as conn:
+        cur = conn.cursor()
+        if user_id:
+            cur.execute("SELECT COUNT(*) FROM usage_history WHERE operation='free_task' AND user_id=? AND DATE(created_at)=?", (user_id, today))
+        else:
+            cur.execute("SELECT COUNT(*) FROM usage_history WHERE operation='free_task' AND anonymous_id=? AND DATE(created_at)=?", (anon_id, today))
+        return cur.fetchone()[0]
+
+
+def _record_free_task(user_id: Optional[str], anon_id: Optional[str]) -> None:
+    with db_session() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO usage_history (id, user_id, anonymous_id, operation, pages_processed) VALUES (?,?,?,?,0)",
+            (uuid.uuid4().hex, user_id, anon_id, "free_task"),
+        )
+
+
+@app.middleware("http")
+async def free_daily_task_cap(request: Request, call_next):
+    """Server-side enforcement of the Free-tier daily task cap.
+
+    Fail-open by design: any error in the limiter must NEVER block a request.
+    Paid tiers (tasks_per_day == -1) pass through untouched. split-ocr (NO-TOUCH)
+    is excluded via the skip-list above.
+    """
+    path = request.url.path
+    if request.method != "POST" or not path.startswith("/api/") or path.startswith(_NON_TOOL_API_PREFIXES):
+        return await call_next(request)
+
+    try:
+        user = _user_from_bearer(request)
+        limits = get_user_plan_limits(user)
+        cap = limits.get("tasks_per_day", -1)
+    except Exception:
+        return await call_next(request)
+
+    if cap == -1:
+        return await call_next(request)  # paid / unlimited
+
+    uid = user["id"] if user else None
+    anon = None if user else ("ip:" + hashlib.sha256(get_client_ip(request).encode()).hexdigest()[:24])
+    try:
+        used = _free_tasks_today(uid, anon)
+    except Exception:
+        return await call_next(request)  # fail-open on counting error
+
+    if used >= cap:
+        return _JSONResponse(status_code=429, content={
+            "detail": f"You've reached the free daily limit of {cap} tasks. Upgrade to PRO for unlimited — SUMMER HOT €4.99/mo.",
+            "reason": "daily_task_limit",
+            "upgrade": True,
+            "limit": cap,
+            "used": used,
+        })
+
+    resp = await call_next(request)
+    if 200 <= resp.status_code < 300:
+        try:
+            _record_free_task(uid, anon)
+        except Exception:
+            pass
+    return resp
 
 def check_and_update_voucher_expiry(user_id: str) -> None:
     """Check if user's voucher has expired and revert to original plan."""
