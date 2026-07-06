@@ -1357,6 +1357,48 @@ async def get_usage_status(
         }
 
 
+@app.get("/api/track/recent")
+async def get_recent_activity(
+    limit: int = 8,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    """Recent tool operations for the signed-in user — powers the workspace home.
+
+    Reads usage_history (real operation names attributed to user_id since the usage-attribution
+    fix). Anonymous users get an empty list — we never persist their files or identity here.
+    Grouped by operation so the home shows distinct tools ("Compress · used 3× · 2h ago"),
+    most-recent first. Never raises — a logging/query hiccup degrades to an empty list.
+    """
+    try:
+        user = get_current_user(credentials)
+    except Exception:
+        return {"items": []}
+    if not user:
+        return {"items": []}
+    try:
+        n = max(1, min(int(limit or 8), 20))
+    except Exception:
+        n = 8
+    try:
+        with db_session() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT operation, MAX(created_at) AS last_at, COUNT(*) AS uses
+                FROM usage_history
+                WHERE user_id = ? AND operation NOT IN ('free_task','track','pdf_operation','operation')
+                GROUP BY operation
+                ORDER BY last_at DESC
+                LIMIT ?
+                """,
+                (user["id"], n),
+            )
+            rows = cur.fetchall()
+        return {"items": [{"operation": r["operation"], "last_at": r["last_at"], "uses": r["uses"]} for r in rows]}
+    except Exception:
+        return {"items": []}
+
+
 @app.post("/api/track/returning")
 async def get_returning_status(
     request: Request,

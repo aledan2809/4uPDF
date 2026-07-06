@@ -7,6 +7,7 @@ import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import ApiKeysPanel from "../components/ApiKeysPanel";
 import { useAuth, getUsageStatus, PlanLimits } from "../lib/auth";
+import { describeOperation, relativeTime, QUICK_START } from "../lib/toolMeta";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3099";
 
@@ -16,6 +17,15 @@ interface UsageData {
   limit_reached: boolean;
   plan: string;
   limits: PlanLimits;
+  tasks_used_today?: number;
+  tasks_limit?: number;
+  tasks_remaining?: number;
+}
+
+interface RecentItem {
+  operation: string;
+  last_at: string;
+  uses: number;
 }
 
 export default function DashboardPage() {
@@ -23,6 +33,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loadingUsage, setLoadingUsage] = useState(true);
+  const [recent, setRecent] = useState<RecentItem[]>([]);
   const [voucherCode, setVoucherCode] = useState("");
   const [voucherError, setVoucherError] = useState("");
   const [voucherSuccess, setVoucherSuccess] = useState("");
@@ -46,11 +57,14 @@ export default function DashboardPage() {
         try {
           const data = await getUsageStatus(getToken());
           setUsage({
-            pages_used_today: 0,
+            pages_used_today: data.pages_used_today ?? 0,
             pages_limit: data.limits.pages_per_day,
-            limit_reached: false,
+            limit_reached: data.limit_reached ?? false,
             plan: data.plan,
             limits: data.limits,
+            tasks_used_today: data.tasks_used_today,
+            tasks_limit: data.tasks_limit,
+            tasks_remaining: data.tasks_remaining,
           });
         } catch {
           console.error("Failed to fetch usage");
@@ -60,6 +74,25 @@ export default function DashboardPage() {
       }
     }
     fetchUsage();
+  }, [user, getToken]);
+
+  // Recent activity — powers "pick up where you left off". Best-effort: an empty/failed
+  // response simply shows the empty state, never blocks the workspace.
+  useEffect(() => {
+    async function fetchRecent() {
+      if (!user) return;
+      try {
+        const res = await fetch(`${API_URL}/api/track/recent?limit=6`, {
+          headers: { Authorization: `Bearer ${getToken()}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data?.items)) setRecent(data.items);
+      } catch {
+        /* leave recent empty */
+      }
+    }
+    fetchRecent();
   }, [user, getToken]);
 
   const handleRedeemVoucher = async () => {
@@ -91,11 +124,14 @@ export default function DashboardPage() {
         await refreshUser();
         const newUsage = await getUsageStatus(getToken());
         setUsage({
-          pages_used_today: 0,
+          pages_used_today: newUsage.pages_used_today ?? 0,
           pages_limit: newUsage.limits.pages_per_day,
-          limit_reached: false,
+          limit_reached: newUsage.limit_reached ?? false,
           plan: newUsage.plan,
           limits: newUsage.limits,
+          tasks_used_today: newUsage.tasks_used_today,
+          tasks_limit: newUsage.tasks_limit,
+          tasks_remaining: newUsage.tasks_remaining,
         });
       } else {
         setVoucherError(data.detail || "Invalid voucher code");
@@ -174,8 +210,7 @@ export default function DashboardPage() {
   };
 
   // Unauthenticated: the effect above redirects to /login. Show a neutral
-  // notice (no dashboard-shaped chrome) for the brief moment before it fires,
-  // so we never present account UI to a signed-out visitor.
+  // notice (no dashboard-shaped chrome) for the brief moment before it fires.
   if (!loading && !user) {
     return (
       <>
@@ -193,7 +228,7 @@ export default function DashboardPage() {
       <>
         <Navbar />
         <main className="min-h-screen py-16">
-          <div className="max-w-4xl mx-auto px-4">
+          <div className="max-w-5xl mx-auto px-4">
             <div className="animate-pulse">
               <div className="h-8 bg-gray-800 rounded w-1/3 mb-8" />
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -215,6 +250,7 @@ export default function DashboardPage() {
     gold: "text-yellow-400",
     custom: "text-purple-400",
   };
+  const planDisplay: Record<string, string> = { silver: "PRO", gold: "Business" };
 
   const usagePercent = usage
     ? usage.pages_limit === -1
@@ -222,63 +258,113 @@ export default function DashboardPage() {
       : Math.min((usage.pages_used_today / usage.pages_limit) * 100, 100)
     : 0;
 
+  const firstName = user.email.split("@")[0].split(/[.\-_]/)[0];
+  const greet = firstName.charAt(0).toUpperCase() + firstName.slice(1);
+  const isFree = user.plan === "free";
+  const tasksLimit = usage?.tasks_limit ?? -1;
+  const tasksRemaining = usage?.tasks_remaining;
+  const showTaskNudge =
+    isFree && tasksLimit > 0 && typeof tasksRemaining === "number" && tasksRemaining <= 1;
+  const usesSmartTools = recent.some((r) => /invoice|ocr|receipt|split|extract|searchable/i.test(r.operation));
+
   return (
     <>
       <Navbar />
-      <main className="min-h-screen py-16">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold text-white mb-2">Dashboard</h1>
-            <p className="text-gray-400">Welcome back, {user.email}</p>
+      <main className="min-h-screen py-12 sm:py-16">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+          {/* Workspace header */}
+          <div className="mb-6">
+            <h1 className="text-3xl font-bold text-white mb-1">Welcome back, {greet} 👋</h1>
+            <p className="text-gray-400">Pick up where you left off — or start something new.</p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-            {/* Plan Card */}
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-              <h2 className="text-lg font-semibold text-white mb-4">Your Plan</h2>
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <p className={`text-2xl font-bold capitalize ${planColors[user.plan] || "text-white"}`}>
-                    {user.plan}
-                  </p>
-                  {user.subscription_status === "active" && (
-                    <p className="text-sm text-green-400">Active subscription</p>
-                  )}
-                  {user.subscription_end_date && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      Renews {new Date(user.subscription_end_date).toLocaleDateString()}
-                    </p>
-                  )}
-                </div>
-                {user.plan !== "free" && user.plan !== "custom" && (
-                  <span className="px-3 py-1 bg-green-600/20 text-green-400 text-sm rounded-full">
-                    Premium
-                  </span>
-                )}
-              </div>
-
-              {user.plan === "free" ? (
-                <Link
-                  href="/pricing"
-                  className="block w-full py-3 px-4 text-center bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
-                >
-                  Upgrade Plan
-                </Link>
-              ) : user.plan !== "custom" ? (
-                <button
-                  onClick={handleManageSubscription}
-                  disabled={managingSubscription}
-                  className="w-full py-3 px-4 text-center bg-gray-800 hover:bg-gray-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
-                >
-                  {managingSubscription ? "Loading..." : "Manage Subscription"}
-                </button>
-              ) : (
-                <div className="text-sm text-gray-400">
-                  Custom plan managed by administrator
-                </div>
-              )}
+          {/* Start a task */}
+          <section className="mb-8" aria-labelledby="start-heading">
+            <div className="flex items-center justify-between mb-3">
+              <h2 id="start-heading" className="text-sm font-semibold uppercase tracking-wide text-gray-500">
+                Start a task
+              </h2>
+              <Link href="/#tools" className="text-sm text-blue-400 hover:text-blue-300 underline">
+                All tools →
+              </Link>
             </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {QUICK_START.map((t) => (
+                <Link
+                  key={t.href}
+                  href={t.href}
+                  className="flex flex-col items-center gap-2 py-4 px-2 bg-gray-900 border border-gray-800 rounded-xl hover:border-blue-500/60 hover:bg-gray-800 transition-colors text-center min-h-[44px]"
+                >
+                  <span className="text-2xl" aria-hidden="true">{t.icon}</span>
+                  <span className="text-sm text-gray-200">{t.label}</span>
+                </Link>
+              ))}
+            </div>
+          </section>
 
+          {/* Recent activity */}
+          <section className="mb-8" aria-labelledby="recent-heading">
+            <h2 id="recent-heading" className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-3">
+              Recent
+            </h2>
+            {recent.length > 0 ? (
+              <div className="grid gap-2.5">
+                {recent.map((item) => {
+                  const meta = describeOperation(item.operation);
+                  const when = relativeTime(item.last_at);
+                  return (
+                    <div
+                      key={item.operation}
+                      className="flex items-center gap-3 p-3 bg-gray-900 border border-gray-800 rounded-lg"
+                    >
+                      <span className="w-9 h-9 flex-none rounded-lg bg-blue-600/15 grid place-items-center text-lg" aria-hidden="true">
+                        {meta.icon}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-white truncate">{meta.label}</p>
+                        <p className="text-xs text-gray-500">
+                          Used {item.uses}×{when ? ` · ${when}` : ""}
+                        </p>
+                      </div>
+                      <Link
+                        href={meta.href}
+                        className="ml-auto flex-none px-3 py-2 text-sm bg-gray-800 hover:bg-gray-700 text-white rounded-lg transition-colors"
+                      >
+                        Open
+                      </Link>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="p-5 bg-gray-900 border border-gray-800 border-dashed rounded-xl text-center">
+                <p className="text-gray-400 text-sm">No recent activity yet.</p>
+                <p className="text-gray-500 text-xs mt-1">Start with a tool above — your recent tools will appear here.</p>
+              </div>
+            )}
+          </section>
+
+          {/* Approaching-limit nudge (free tier) */}
+          {showTaskNudge && (
+            <div className="mb-8 flex items-center gap-3 p-4 bg-amber-500/10 border border-amber-500/40 rounded-xl">
+              <span className="text-xl" aria-hidden="true">⏳</span>
+              <p className="text-sm text-amber-200">
+                {tasksRemaining === 0
+                  ? "You've used all 3 free tasks today."
+                  : "1 free task left today."}{" "}
+                <span className="text-amber-100">PRO removes the daily cap.</span>
+              </p>
+              <Link
+                href="/pricing?plan=silver"
+                className="ml-auto flex-none px-3 py-2 text-sm bg-amber-500 hover:bg-amber-400 text-gray-900 font-medium rounded-lg transition-colors"
+              >
+                See PRO
+              </Link>
+            </div>
+          )}
+
+          {/* Usage + plan status */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             {/* Usage Card */}
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
               <h2 className="text-lg font-semibold text-white mb-4">Today&apos;s Usage</h2>
@@ -290,27 +376,28 @@ export default function DashboardPage() {
               ) : usage ? (
                 <>
                   <div className="flex items-baseline justify-between mb-2">
-                    <span className="text-3xl font-bold text-white">
+                    <span className="text-3xl font-bold text-white tabular-nums">
                       {usage.pages_used_today}
                     </span>
                     <span className="text-gray-400">
                       / {usage.pages_limit === -1 ? "Unlimited" : usage.pages_limit} pages
                     </span>
                   </div>
-                  <div className="w-full bg-gray-800 rounded-full h-2 mb-4">
+                  <div className="w-full bg-gray-800 rounded-full h-2 mb-3">
                     <div
                       className={`h-2 rounded-full transition-all ${
-                        usagePercent >= 90
-                          ? "bg-red-500"
-                          : usagePercent >= 70
-                          ? "bg-yellow-500"
-                          : "bg-blue-600"
+                        usagePercent >= 90 ? "bg-red-500" : usagePercent >= 70 ? "bg-yellow-500" : "bg-blue-600"
                       }`}
                       style={{ width: `${usage.pages_limit === -1 ? 0 : usagePercent}%` }}
                     />
                   </div>
+                  {isFree && tasksLimit > 0 && typeof tasksRemaining === "number" && (
+                    <p className="text-sm text-gray-400">
+                      {Math.max(0, tasksRemaining)} of {tasksLimit} free tasks left today
+                    </p>
+                  )}
                   {usage.limit_reached && (
-                    <p className="text-sm text-red-400">
+                    <p className="text-sm text-red-400 mt-1">
                       Daily limit reached.{" "}
                       <Link href="/pricing" className="text-blue-400 underline hover:text-blue-300">
                         Upgrade for more
@@ -322,18 +409,85 @@ export default function DashboardPage() {
                 <p className="text-gray-400">Failed to load usage data</p>
               )}
             </div>
+
+            {/* Plan / upgrade Card */}
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+              <h2 className="text-lg font-semibold text-white mb-4">Your Plan</h2>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className={`text-2xl font-bold ${planColors[user.plan] || "text-white"}`}>
+                    {planDisplay[user.plan] || user.plan.charAt(0).toUpperCase() + user.plan.slice(1)}
+                  </p>
+                  {user.subscription_status === "active" && (
+                    <p className="text-sm text-green-400">Active subscription</p>
+                  )}
+                  {user.subscription_end_date && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Renews {new Date(user.subscription_end_date).toLocaleDateString()}
+                    </p>
+                  )}
+                </div>
+                {user.plan !== "free" && user.plan !== "custom" && (
+                  <span className="px-3 py-1 bg-green-600/20 text-green-400 text-sm rounded-full">Premium</span>
+                )}
+              </div>
+              {isFree ? (
+                <Link
+                  href="/pricing?plan=silver"
+                  className="block w-full py-3 px-4 text-center bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  Upgrade to PRO
+                </Link>
+              ) : user.plan !== "custom" ? (
+                <button
+                  onClick={handleManageSubscription}
+                  disabled={managingSubscription}
+                  className="w-full py-3 px-4 text-center bg-gray-800 hover:bg-gray-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {managingSubscription ? "Loading..." : "Manage Subscription"}
+                </button>
+              ) : (
+                <div className="text-sm text-gray-400">Custom plan managed by administrator</div>
+              )}
+            </div>
+          </div>
+
+          {/* Contextual upgrade card (free users) */}
+          {isFree && (
+            <div className="mb-10 rounded-xl p-6 border border-blue-500/40 bg-gradient-to-b from-blue-600/15 to-blue-600/5">
+              <h3 className="text-lg font-semibold text-white">
+                {usesSmartTools ? "You're using Smart Tools — PRO makes them unlimited." : "Do more with PRO."}
+              </h3>
+              <p className="text-sm text-blue-100/80 mt-1">
+                Unlimited daily tasks, no ads, files up to 200MB, batch processing, OCR &amp; Smart Tools, priority support.
+              </p>
+              <div className="flex flex-wrap items-center gap-3 mt-4">
+                <Link
+                  href="/pricing?plan=silver"
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  See PRO — from €4.99/mo
+                </Link>
+                <Link href="/pricing" className="text-sm text-blue-300 hover:text-blue-200 underline">
+                  Compare plans
+                </Link>
+              </div>
+            </div>
+          )}
+
+          {/* Account & settings (secondary) */}
+          <div className="mb-4">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-3">Account &amp; settings</h2>
           </div>
 
           {/* Plan Features */}
           {usage?.limits && (
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-8">
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
               <h2 className="text-lg font-semibold text-white mb-4">Plan Features</h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div>
                   <p className="text-sm text-gray-400">File Size Limit</p>
-                  <p className="text-lg font-semibold text-white">
-                    {usage.limits.max_file_size_mb} MB
-                  </p>
+                  <p className="text-lg font-semibold text-white">{usage.limits.max_file_size_mb} MB</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-400">Pages per Day</p>
@@ -361,7 +515,7 @@ export default function DashboardPage() {
           <ApiKeysPanel />
 
           {/* Voucher Redemption */}
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-8">
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
             <h2 className="text-lg font-semibold text-white mb-4">Redeem Voucher</h2>
             <div className="flex gap-3">
               <input

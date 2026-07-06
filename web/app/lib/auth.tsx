@@ -207,7 +207,7 @@ export async function trackAnonymousUsage(pages: number = 0): Promise<UsageInfo 
   return response.json();
 }
 
-export async function getUsageStatus(token?: string | null): Promise<UsageInfo & { authenticated: boolean; plan: string; limits: PlanLimits; tasks_used_today?: number; tasks_limit?: number; tasks_remaining?: number }> {
+export async function getUsageStatus(token?: string | null): Promise<UsageInfo & { authenticated: boolean; plan: string; limits: PlanLimits; pages_used_today?: number; tasks_used_today?: number; tasks_limit?: number; tasks_remaining?: number }> {
   const fingerprint = await generateFingerprint();
   const localToken = getOrCreateLocalToken();
 
