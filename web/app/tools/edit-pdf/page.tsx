@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import ToolPageLayout from "../../components/ToolPageLayout";
 import FileUploadZone from "../../components/FileUploadZone";
+import { usePendingFiles } from "../../lib/pendingFile";
 import NextSteps from "../../components/NextSteps";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
@@ -225,6 +226,11 @@ export default function EditPDFPage() {
     },
     [renderPage]
   );
+
+  // File-first entry: pick up a file stashed by the homepage dropzone.
+  usePendingFiles((files) => {
+    if (files[0]) loadPdf(files[0]);
+  });
 
   const goToPage = useCallback(
     (n: number) => {

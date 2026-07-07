@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import ToolPageLayout from "../../components/ToolPageLayout";
 import FileUploadZone from "../../components/FileUploadZone";
+import { usePendingFiles } from "../../lib/pendingFile";
 
 const faqs = [
   {
@@ -54,6 +55,9 @@ export default function PNGToPDFPage() {
     setResult(null);
     setError(null);
   }, []);
+
+  // File-first entry: pick up a file stashed by the homepage dropzone.
+  usePendingFiles(handleFilesSelected);
 
   const removeFile = (index: number) => {
     setFiles((prev) => prev.filter((_, i) => i !== index));

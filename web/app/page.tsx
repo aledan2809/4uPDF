@@ -4,6 +4,7 @@ import Footer from "./components/Footer";
 import FAQAccordion from "./components/FAQAccordion";
 import FAQSchema from "./components/FAQSchema";
 import CasCarousel from "./components/CasCarousel";
+import FileFirstHero from "./components/FileFirstHero";
 
 const popularTools = [
   {
@@ -167,10 +168,11 @@ export default function HomePage() {
                 Transform your PDFs with our powerful suite of 40+ tools. Merge, split, compress,
                 convert, edit, and more - all in your browser.
               </p>
+              <FileFirstHero />
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Link
                   href="#tools"
-                  className="px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white text-lg font-medium rounded-xl transition-colors"
+                  className="px-8 py-4 bg-gray-800 hover:bg-gray-700 text-white text-lg font-medium rounded-xl transition-colors border border-gray-700"
                 >
                   Explore All Tools
                 </Link>

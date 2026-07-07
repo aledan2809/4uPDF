@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import ToolPageLayout from "../../components/ToolPageLayout";
 import FileUploadZone from "../../components/FileUploadZone";
+import { usePendingFiles } from "../../lib/pendingFile";
 import UpgradePrompt from "../../components/UpgradePrompt";
 import NextSteps from "../../components/NextSteps";
 import { useUsageCheck } from "../../lib/auth";
@@ -66,6 +67,9 @@ export default function MergePDFPage() {
     setResult(null);
     setError(null);
   }, []);
+
+  // File-first entry: pick up a file stashed by the homepage dropzone.
+  usePendingFiles(handleFilesSelected);
 
   const removeFile = (id: string) => {
     setFiles((prev) => prev.filter((f) => f.id !== id));
