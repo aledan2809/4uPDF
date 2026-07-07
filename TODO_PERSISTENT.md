@@ -224,3 +224,41 @@ Backend-ul Advanced nu e doar fix de onestitate, e **venit**, pe două suprafeț
 ---
 
 *Ultima actualizare: 2026-06-03*
+
+## 🔍 Introspection Audit 2026-06-20
+> Audit complet (gap strategie↔cod · ghid per-pagină · deep research · funcțional + cyber).
+> **Scor AIWebAuditor: 87/100** · GDPR 90. 5 acțiuni deschise · 🔴 2 critice.
+> Rapoarte: `Reports/INTROSPECTION-2026-06-20/` (00-SUMMARY.md, 01-gap-strategy-vs-code.md, 02-pages-guide-RO.md, 03-deep-research-optimization.md, 04-audit-findings.md, 04b-security-audit.md)
+> Checklist Alex centralizat: `Master/reports/Alex_TODO_2026-06-20.md` + tab „Introspection Audit" în UI Master.
+
+## 4uPDF (`4updf.com`) — ACTIVE (split-ocr = NO-TOUCH) (fix-urile așteaptă review)
+Sursă: `4uPDF/Reports/INTROSPECTION-2026-06-20/`
+
+- [ ] 🔴 **`localhost:3099` hardcodat în 5 fișiere (8 locuri)** — 4 unelte batch/extractor RUPTE în prod (ocolesc proxy-ul). Fix: `/api/...` relativ + confirmă `NEXT_PUBLIC_API_URL` pe prod.
+  - 🗣️ *Pe înțelesul tău:* 4 unelte încearcă să vorbească cu calculatorul tău local în loc de server, deci sunt rupte pe site-ul live. După fix, funcționează pentru toți vizitatorii.
+- [ ] 🔴 **Sitemap acoperă doar 13/70 unelte** — pierdere SEO masivă pe restul.
+  - 🗣️ *Pe înțelesul tău:* Google vede doar 13 din cele 70 de unelte, deci restul nu apar în căutări. După completarea sitemap-ului, toate uneltele pot fi găsite pe Google.
+- [ ] 🟡 **`JWT_SECRET_KEY` fix în VPS2 `.env`** (acum random fallback → restart deloghează pe toți) + confirmă `ALLOWED_ORIGINS`=4updf.com + `SUPER_ADMIN_KEY` real.
+  - 🗣️ *Pe înțelesul tău:* Acum la fiecare repornire a serverului toți utilizatorii sunt delogați (cheia de login se schimbă singură). După fix, sesiunile rămân valide după restart.
+- [ ] 🟡 **`npm audit fix`** (`next`+`undici` high; `next` posibil breaking) + rate-limit pe login + tool endpoints.
+  - 🗣️ *Pe înțelesul tău:* Sunt vulnerabilități în biblioteci și login-ul n-are limită de încercări. După fix, e sigur și mai greu de atacat prin forțare.
+- [ ] 🟡 **GDPR** („Refuză tot" + GA-after-consent) + README/STRATEGY lipsă.
+  - 🗣️ *Pe înțelesul tău:* Lipsește butonul „Refuză tot" la cookie-uri și urmărirea pornește înainte de acord. După fix, ești conform GDPR și nu urmărești fără permisiune.
+- _Solid: bcrypt, JWT semnat, anti-path-traversal, CSP, CORS non-wildcard, 0 SQLi, cleanup 24h. split-ocr (NO-TOUCH) — upload nume brut semnalat doar, fără fix._
+
+---
+
+
+---
+
+## [~] 🚀 Proactive-UX build P1→P4 — LIVE 2026-07-07 (sesiune mesh)
+
+Toate cele 4 faze construite + deployate + verificate pe prod (branch `nginx-api-deploy`):
+- [x] **P1 — workspace home** (`3c87922`, DEPLOYED 2026-07-07): dashboard → workspace (Recent din `/api/track/recent` + quick-start + nudge). Verificat: operație reală → feed populat.
+- [x] **P1b — "what next" chaining** (`b50698b`): după rezultat, sugestii de pas următor (merge→compress→sign) — `NextSteps` + `NEXT_STEP_MAP` în toolMeta; wired merge/compress/split/edit. Verificat pe prod (rezultatul merge afișează sugestiile).
+- [x] **P2 — file-first homepage** (`991d440`): dropzone-first pe hero → intent chooser pe tip fișier → tool-ul se deschide cu fișierul preîncărcat (`pendingFile` stash, pickup în 10 pagini). „All tools" NEATINS (aditiv). Verificat end-to-end.
+- [x] **P3 — paid workspace toolkit** (`4a084d2`): PRO/Business văd pe home ce include planul (Smart Tools + batch + API keys), gated pe `limits`. Verificat live cu contul GOLD (screenshot).
+- [x] **P4 — admin command centre** (`8014494`): `GET /api/admin/attention` (cap-hit conversie / activation / renewal / churn / vouchere) + feed „Needs attention" + KPI azi pe /superadmin. Verificat live cu admin (semnale reale).
+
+**Rămas (follow-on):** reels operation-in-action batch (merge/compress/split/ocr/invoice EN + toate 6 RO) — în lucru 2026-07-07; înregistrare în MA Materiale după render.
+
