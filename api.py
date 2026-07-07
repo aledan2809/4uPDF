@@ -2432,6 +2432,112 @@ async def analytics_heartbeat(request: Request):
     return await heartbeat(request)
 
 
+@app.get("/api/admin/attention")
+async def get_admin_attention(request: Request):
+    """'Needs attention' feed for the admin command centre: actionable signals
+    computed from live data, each linking to the drill-down page that handles it."""
+    _require_superadmin(request)
+
+    items = []
+    with db_session() as conn:
+        cursor = conn.cursor()
+
+        # Free users who hit today's task cap (3/day) — conversion window is open NOW.
+        cursor.execute("""
+            SELECT COUNT(*) AS c FROM (
+                SELECT uh.user_id FROM usage_history uh
+                JOIN users u ON u.id = uh.user_id
+                WHERE u.plan = 'free' AND DATE(uh.created_at) = DATE('now')
+                GROUP BY uh.user_id HAVING COUNT(*) >= 3
+            )
+        """)
+        cap_hit = cursor.fetchone()["c"]
+        if cap_hit:
+            items.append({
+                "severity": "warn", "kind": "conversion",
+                "title": f"{cap_hit} free user{'s' if cap_hit != 1 else ''} hit today's task cap",
+                "detail": "They wanted to do more than the free tier allows — best moment to convert.",
+                "href": "/superadmin/users",
+            })
+
+        # New signups (7d) that never ran a tool — activation problem.
+        cursor.execute("""
+            SELECT COUNT(*) AS c FROM users u
+            WHERE u.created_at >= DATETIME('now', '-7 days')
+              AND NOT EXISTS (SELECT 1 FROM usage_history uh WHERE uh.user_id = u.id)
+        """)
+        never_ran = cursor.fetchone()["c"]
+        if never_ran:
+            items.append({
+                "severity": "warn", "kind": "activation",
+                "title": f"{never_ran} signup{'s' if never_ran != 1 else ''} this week never ran a tool",
+                "detail": "Registered but no first operation — onboarding is losing them.",
+                "href": "/superadmin/users",
+            })
+
+        # Paid access expiring within 7 days (subscription end-date or voucher redemption).
+        cursor.execute("""
+            SELECT COUNT(*) AS c FROM users
+            WHERE plan != 'free' AND subscription_end_date IS NOT NULL
+              AND subscription_end_date >= DATETIME('now')
+              AND subscription_end_date <= DATETIME('now', '+7 days')
+        """)
+        expiring_subs = cursor.fetchone()["c"]
+        cursor.execute("""
+            SELECT COUNT(DISTINCT vr.user_id) AS c FROM voucher_redemptions vr
+            JOIN users u ON u.id = vr.user_id
+            WHERE u.plan != 'free'
+              AND vr.expires_at >= DATETIME('now')
+              AND vr.expires_at <= DATETIME('now', '+7 days')
+        """)
+        expiring_vouchers = cursor.fetchone()["c"]
+        expiring = expiring_subs + expiring_vouchers
+        if expiring:
+            items.append({
+                "severity": "warn", "kind": "renewal",
+                "title": f"{expiring} paid account{'s' if expiring != 1 else ''} expiring within 7 days",
+                "detail": "Subscription or voucher access lapses this week — renewal outreach window.",
+                "href": "/superadmin/users",
+            })
+
+        # Paid users idle 14+ days — churn risk.
+        cursor.execute("""
+            SELECT COUNT(*) AS c FROM users u
+            WHERE u.plan IN ('bronze', 'silver', 'gold')
+              AND NOT EXISTS (
+                  SELECT 1 FROM usage_history uh
+                  WHERE uh.user_id = u.id AND uh.created_at >= DATETIME('now', '-14 days')
+              )
+        """)
+        idle_paid = cursor.fetchone()["c"]
+        if idle_paid:
+            items.append({
+                "severity": "info", "kind": "churn",
+                "title": f"{idle_paid} paid user{'s' if idle_paid != 1 else ''} inactive for 14+ days",
+                "detail": "Paying but not using the product — churn risk at next renewal.",
+                "href": "/superadmin/analytics",
+            })
+
+        # Voucher hygiene: active codes that are exhausted or expiring within 7 days.
+        cursor.execute("""
+            SELECT COUNT(*) AS c FROM vouchers
+            WHERE is_active = 1 AND (
+                (max_uses > 0 AND current_uses >= max_uses)
+                OR (expires_at IS NOT NULL AND expires_at <= DATETIME('now', '+7 days'))
+            )
+        """)
+        stale_vouchers = cursor.fetchone()["c"]
+        if stale_vouchers:
+            items.append({
+                "severity": "info", "kind": "vouchers",
+                "title": f"{stale_vouchers} voucher{'s' if stale_vouchers != 1 else ''} exhausted or expiring soon",
+                "detail": "Still marked active but used up / about to expire — clean up or extend.",
+                "href": "/superadmin/vouchers",
+            })
+
+    return {"items": items}
+
+
 @app.get("/api/admin/active-users")
 async def sse_active_users(request: Request):
     """SSE endpoint for real-time active users with details."""

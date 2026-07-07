@@ -16,9 +16,18 @@ interface Stats {
   active_users_now: number;
 }
 
+interface AttentionItem {
+  severity: "warn" | "info";
+  kind: string;
+  title: string;
+  detail: string;
+  href: string;
+}
+
 export default function SuperAdminDashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [attention, setAttention] = useState<AttentionItem[] | null>(null);
 
   useEffect(() => {
     fetch(`${API_URL}/api/admin/stats`, fetchOpts)
@@ -26,6 +35,14 @@ export default function SuperAdminDashboard() {
       .then(setStats)
       .catch(console.error)
       .finally(() => setLoading(false));
+  }, []);
+
+  // "Needs attention" feed — best-effort: a failure just hides the section.
+  useEffect(() => {
+    fetch(`${API_URL}/api/admin/attention`, fetchOpts)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setAttention(Array.isArray(d?.items) ? d.items : null))
+      .catch(() => setAttention(null));
   }, []);
 
   if (loading) {
@@ -40,6 +57,10 @@ export default function SuperAdminDashboard() {
     .sort(([, a], [, b]) => b - a)
     .slice(0, 8);
 
+  const today = new Date().toISOString().slice(0, 10);
+  const opsToday = stats.daily_operations.find((d) => d.date === today)?.count ?? 0;
+  const newUsersToday = stats.daily_new_users.find((d) => d.date === today)?.count ?? 0;
+
   return (
     <div className="space-y-8">
       <div>
@@ -47,10 +68,45 @@ export default function SuperAdminDashboard() {
         <p className="text-gray-400 text-sm mt-1">Overview of your 4uPDF platform</p>
       </div>
 
+      {/* Needs attention — actionable signals; each links to its drill-down page */}
+      {attention !== null && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+          <h2 className="text-lg font-semibold text-white mb-4">Needs attention</h2>
+          {attention.length > 0 ? (
+            <div className="space-y-2">
+              {attention.map((item) => (
+                <a
+                  key={item.kind + item.title}
+                  href={item.href}
+                  className={`flex items-start gap-3 p-3 rounded-lg border transition-colors ${
+                    item.severity === "warn"
+                      ? "bg-amber-500/10 border-amber-500/40 hover:bg-amber-500/20"
+                      : "bg-gray-800 border-gray-700 hover:bg-gray-700"
+                  }`}
+                >
+                  <span className="text-lg leading-none mt-0.5" aria-hidden>
+                    {item.severity === "warn" ? "⚠️" : "ℹ️"}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-white">{item.title}</span>
+                    <span className="block text-xs text-gray-400 mt-0.5">{item.detail}</span>
+                  </span>
+                  <span className="ml-auto text-gray-500 text-sm mt-1">→</span>
+                </a>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-green-400">All clear — nothing needs your attention right now.</p>
+          )}
+        </div>
+      )}
+
       {/* Stats cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         <StatCard label="Total Users" value={stats.total_users} color="blue" />
         <StatCard label="Active Now" value={stats.active_users_now} color="green" />
+        <StatCard label="New Users Today" value={newUsersToday} color="blue" />
+        <StatCard label="Operations Today" value={opsToday} color="green" />
         <StatCard label="Total Operations" value={stats.total_operations} color="purple" />
         <StatCard
           label="Paid Users"
