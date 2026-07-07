@@ -7,7 +7,7 @@ import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import ApiKeysPanel from "../components/ApiKeysPanel";
 import { useAuth, getUsageStatus, PlanLimits } from "../lib/auth";
-import { describeOperation, relativeTime, QUICK_START } from "../lib/toolMeta";
+import { describeOperation, relativeTime, QUICK_START, SMART_TOOLS, BATCH_TOOLS } from "../lib/toolMeta";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3099";
 
@@ -302,6 +302,70 @@ export default function DashboardPage() {
             </div>
           </section>
 
+          {/* Paid toolkit — surface what the plan already includes, right on the home.
+              Free users keep the upgrade cards below instead. */}
+          {!isFree && usage?.limits && (usage.limits.smart_tools || usage.limits.batch_processing || usage.limits.api_access) && (
+            <section className="mb-8" aria-labelledby="toolkit-heading">
+              <h2 id="toolkit-heading" className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-3">
+                Your {planDisplay[user.plan] || "plan"} toolkit
+              </h2>
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-5">
+                {usage.limits.smart_tools && (
+                  <div>
+                    <p className="text-sm text-gray-300 mb-2">
+                      Smart Tools <span className="text-gray-500">— included in your plan</span>
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                      {SMART_TOOLS.map((t) => (
+                        <Link
+                          key={t.href}
+                          href={t.href}
+                          className="flex flex-col items-center gap-1.5 py-3 px-2 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-center"
+                        >
+                          <span className="text-xl" aria-hidden="true">{t.icon}</span>
+                          <span className="text-xs text-gray-200">{t.label}</span>
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {usage.limits.batch_processing && (
+                  <div>
+                    <p className="text-sm text-gray-300 mb-2">
+                      Batch processing <span className="text-gray-500">— many files at once</span>
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {BATCH_TOOLS.map((t) => (
+                        <Link
+                          key={t.label}
+                          href={t.href}
+                          className="flex items-center gap-2 py-2.5 px-3 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors"
+                        >
+                          <span className="text-lg" aria-hidden="true">{t.icon}</span>
+                          <span className="text-sm text-gray-200">{t.label}</span>
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {usage.limits.api_access && (
+                  <div>
+                    <p className="text-sm text-gray-300 mb-2">
+                      PDF API <span className="text-gray-500">— automate from your own systems</span>
+                    </p>
+                    <a
+                      href="#api-panel"
+                      className="inline-flex items-center gap-2 py-2.5 px-3 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors"
+                    >
+                      <span className="text-lg" aria-hidden="true">🔑</span>
+                      <span className="text-sm text-gray-200">Manage API keys</span>
+                    </a>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
           {/* Recent activity */}
           <section className="mb-8" aria-labelledby="recent-heading">
             <h2 id="recent-heading" className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-3">
@@ -512,7 +576,9 @@ export default function DashboardPage() {
           )}
 
           {/* API Keys (B2B PDF API — self-gates on plan api_access) */}
-          <ApiKeysPanel />
+          <div id="api-panel">
+            <ApiKeysPanel />
+          </div>
 
           {/* Voucher Redemption */}
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">

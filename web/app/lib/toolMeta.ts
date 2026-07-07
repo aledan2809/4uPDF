@@ -123,3 +123,20 @@ export const QUICK_START: ToolMeta[] = [
   { label: "PDF → Word", href: "/tools/pdf-to-word", icon: "📝" },
   { label: "Sign", href: "/tools/sign-pdf", icon: "✍️" },
 ];
+
+/** Paid-workspace toolkit tiles — Smart Tools included in PRO/Business plans. */
+export const SMART_TOOLS: ToolMeta[] = [
+  { label: "Split Invoices", href: "/tools/split-invoices", icon: "🧾" },
+  { label: "OCR PDF", href: "/tools/ocr-pdf", icon: "🔍" },
+  { label: "Auto-Rename", href: "/tools/auto-rename-pdf", icon: "🏷️" },
+  { label: "Document Detector", href: "/tools/document-detector", icon: "🗂️" },
+  { label: "Searchable PDF", href: "/tools/searchable-pdf", icon: "🔎" },
+  { label: "Split by Text", href: "/tools/split-by-text", icon: "✂️" },
+];
+
+/** Paid-workspace toolkit tiles — many-files-at-once processing. */
+export const BATCH_TOOLS: ToolMeta[] = [
+  { label: "Batch Splitter", href: "/tools/batch-document-splitter", icon: "🗃️" },
+  { label: "Archive Processor", href: "/tools/archive-processor", icon: "📦" },
+  { label: "Merge many PDFs", href: "/tools/merge-pdf", icon: "📑" },
+];
