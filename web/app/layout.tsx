@@ -117,6 +117,39 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <ReturningVisitorPrompt />
         </AuthProvider>
         <CookieConsent />
+        <Script id="auth-fetch" strategy="afterInteractive">
+          {`
+            // Attach the signed-in user's token to every same-origin /api call.
+            // Without this, tool operations run ANONYMOUSLY: usage is never attributed
+            // to the account (empty "Recent" workspace feed) and paid users can be
+            // blocked by the anonymous free-tier daily cap. The server treats an
+            // invalid/stale token as anonymous (no 401 on optional-auth endpoints),
+            // so this is strictly additive.
+            (function(){
+              try {
+                var API = "${process.env.NEXT_PUBLIC_API_URL || ""}";
+                var orig = window.fetch;
+                window.fetch = function(input, init){
+                  try {
+                    var url = typeof input === 'string' ? input : ((input && input.url) || '');
+                    var abs = url.charAt(0) === '/' ? location.origin + url : url;
+                    var isApi = abs.indexOf(location.origin + '/api/') === 0 || (API && abs.indexOf(API + '/api/') === 0);
+                    if (isApi) {
+                      var tk = localStorage.getItem('auth_token');
+                      if (tk) {
+                        init = init || {};
+                        var h = new Headers(init.headers || (typeof input !== 'string' && input && input.headers) || undefined);
+                        if (!h.has('Authorization')) h.set('Authorization', 'Bearer ' + tk);
+                        init.headers = h;
+                      }
+                    }
+                  } catch(e){}
+                  return orig.call(this, input, init);
+                };
+              } catch(e){}
+            })();
+          `}
+        </Script>
         <Script id="heartbeat" strategy="afterInteractive">
           {`
             (function(){
