@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import ToolPageLayout from "../../components/ToolPageLayout";
 import FileUploadZone from "../../components/FileUploadZone";
+import NextSteps from "../../components/NextSteps";
 
 const faqs = [
   {
@@ -321,6 +322,7 @@ export default function SplitPDFPage() {
             >
               Split Another PDF
             </button>
+            <NextSteps tool="split" />
           </div>
         )}
       </div>

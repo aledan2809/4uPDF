@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import ToolPageLayout from "../../components/ToolPageLayout";
 import FileUploadZone from "../../components/FileUploadZone";
 import UpgradePrompt from "../../components/UpgradePrompt";
+import NextSteps from "../../components/NextSteps";
 import { useUsageCheck } from "../../lib/auth";
 
 const faqs = [
@@ -310,6 +311,7 @@ export default function MergePDFPage() {
                 Merge More Files
               </button>
             </div>
+            <NextSteps tool="merge" />
           </div>
         )}
       </div>

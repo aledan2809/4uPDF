@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import ToolPageLayout from "../../components/ToolPageLayout";
 import FileUploadZone from "../../components/FileUploadZone";
+import NextSteps from "../../components/NextSteps";
 
 const faqs = [
   {
@@ -287,6 +288,7 @@ export default function CompressPDFPage() {
                 Compress Another PDF
               </button>
             </div>
+            <NextSteps tool="compress" />
           </div>
         )}
       </div>

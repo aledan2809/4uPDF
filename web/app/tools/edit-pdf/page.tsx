@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import ToolPageLayout from "../../components/ToolPageLayout";
 import FileUploadZone from "../../components/FileUploadZone";
+import NextSteps from "../../components/NextSteps";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 // Lazy-load pdf.js only in the browser (it touches DOMMatrix/Worker, so it must
@@ -405,6 +406,7 @@ export default function EditPDFPage() {
                 Edit another PDF
               </button>
             </div>
+            <NextSteps tool="edit" />
           </div>
         ) : !fileName ? (
           <>

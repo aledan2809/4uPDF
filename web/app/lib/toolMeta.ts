@@ -74,6 +74,46 @@ export function relativeTime(raw: string): string {
   return d === 1 ? "yesterday" : `${d}d ago`;
 }
 
+// ---------------------------------------------------------------------------
+// "What's next?" chaining — after a tool finishes, suggest the natural follow-up
+// step for the document the user just produced. Keyed by the finishing tool;
+// metas are single-sourced through describeOperation so labels/hrefs/icons never drift.
+
+export interface NextStep {
+  meta: ToolMeta;
+  why: string;
+}
+
+const step = (operation: string, why: string): NextStep => ({ meta: describeOperation(operation), why });
+
+const NEXT_STEP_MAP: Record<string, NextStep[]> = {
+  merge: [
+    step("compress", "A merged file can get heavy — make it lighter to share"),
+    step("page-numbers", "Give the combined document a clean page sequence"),
+    step("sign", "Sending it out? Add your signature"),
+  ],
+  compress: [
+    step("sign", "Sending it? Sign it first"),
+    step("watermark", "Mark the document as yours before sharing"),
+    step("protect", "Add a password before it leaves you"),
+  ],
+  split: [
+    step("compress", "Make each part lighter to send"),
+    step("auto-rename", "Give each part a meaningful file name"),
+    step("merge", "Recombine parts in a different order"),
+  ],
+  edit: [
+    step("sign", "Done editing? Add your signature"),
+    step("compress", "Make the final file lighter"),
+    step("watermark", "Stamp it before sharing"),
+  ],
+};
+
+/** Suggested follow-up tools after finishing `tool` (empty when we have no good chain). */
+export function nextStepsFor(tool: string): NextStep[] {
+  return NEXT_STEP_MAP[tool] ?? [];
+}
+
 /** Curated quick-start tiles for the workspace home ("Start a task"). */
 export const QUICK_START: ToolMeta[] = [
   { label: "Merge", href: "/tools/merge-pdf", icon: "📑" },
