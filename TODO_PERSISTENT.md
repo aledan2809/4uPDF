@@ -248,6 +248,39 @@ Sursă: `4uPDF/Reports/INTROSPECTION-2026-06-20/`
 
 ---
 
+## [ ] 🔒 split-ocr — gatare + limite + monetizare (SESIUNE DEDICATĂ NO-TOUCH CRITIC) — decis 2026-07-12
+
+**Context (verificat read-only 2026-07-12):** `/api/split-ocr` (api.py:3045) e **complet deschis** — fără login, fără client-key, fără cap zilnic (exclus explicit din `_free_tasks_today`, api.py:651). Oricine îl folosește gratis, nelimitat. **Zero voucher** în sistem (tabela `vouchers` goală). Niciun client plătitor real în DB (12 free + 1 gold de test). Construit istoric pt un client B2B RO (pattern `Order No 12345678` + crop 20% sus, tradus din română) — dar relația nu e urmărită nicăieri. User (2026-07-12): clientul specific nu mai e cunoscut → tratăm poarta **generic**.
+
+**Decizie user 2026-07-12:** monetizăm split-ocr — adăugăm login + plan + limite ca să devină plătit (avantajos și pt client, și pt noi).
+
+**⚠️ split-ocr = NO-TOUCH CRITIC** (CLASSIFICATION §2.3 nota 1) → **sesiune dedicată, propose-confirm-apply per §2d**. NU se atinge în sesiuni obișnuite. Pași (de detaliat în sesiunea dedicată):
+- Gate `get_current_user` + plan check pe `/api/split-ocr` (mirror pattern-ul `/api/extract-region` care e deja gated pe `smart_tools`).
+- Limite pe metrici aliniate valoare+cost (pagini/zi, dimensiune, batch) — free-tier taste + PRO/Business unlock.
+- UI split-ocr: zid de upgrade pt. anonim/free, „Sign in / Upgrade".
+- Feed conversie → funnel MA (segment „split-ocr B2B", vezi item funnel mai jos).
+- Verificare live: anon 401, free 403/limită, paid 200 (fără a rupe clientul existent — grandfathering dacă apare).
+
+## [ ] 📣 Funnel 4uPDF în MA — tot outbound prin CRM (PLAN aprobat, BUILD = sesiune MA) — decis 2026-07-12
+
+**Decizie user 2026-07-12:** TOATE mesajele 4uPDF trec printr-un **funnel CRM dedicat în MarketingAutomation** — nu scripturi one-off (`seed-4updf-early-supporter.mjs` = deprecat, se pliază ca segment). Campania B early-supporter = HOLD până e în funnel. „Întâi plan, apoi build."
+
+**Segmente propuse** (fiecare = `EmailSequence` în proiectul MA „4uPDF", trigger prin eveniment 4updf→MA):
+1. **Signup nurture** — cont free nou → welcome + valoare + intro PRO blând. Trigger: `register`.
+2. **Early-supporter** — cohorta primilor useri free → 20% PRO (secvența existentă devine segment). Trigger: cohortă.
+3. **Limit-hit → PRO** (cel mai puternic) — free care lovește capul zilnic (429 `daily_task_limit`) sau folosește batch/OCR/extract. Trigger: eveniment usage/429.
+4. **split-ocr B2B → conversie** — după gatarea split-ocr (item de mai sus), userii split-ocr = procesatori facturi B2B (valoare mare) → ofertă PRO/Business. Trigger: usage split-ocr (necesită identitate = gatarea).
+5. **Paid onboarding** — după subscribe PRO → activare (OCR, batch, API). Trigger: Stripe subscription active.
+6. **Win-back** — inactiv N zile → re-engagement. Trigger: `last_active` > N.
+
+**Plumbing (build, sesiune MA — respectă sesiunea paralelă: NU atinge `rpa-kineto-*`/`public/value-cards/`/`M TODO`):**
+- 4updf: emitter evenimente → MA (signup, cap-hit 429, subscribe) via webhook ecosystem (`POST /api/internal/marketing/events` + `X-Internal-Key`). Cod 4updf-side ACTIVE (NU split-ocr) = surgical. `acq_source/acq_campaign/acq_referrer` deja există în `users`.
+- MA: definește cele 6 secvențe + copy per pas (regula „no AI" → Smart Tools/Automations; onest; EN pt. destinatari, RO unde e cazul).
+- Deprecare `seed-4updf-early-supporter.mjs` (fold în segment 2).
+- Confirmare livrare: dashboard Resend (`noreply@techbiz.ae`) + query enrollment MA.
+
+---
+
 
 ---
 
