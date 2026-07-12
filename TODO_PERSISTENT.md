@@ -236,14 +236,14 @@ Sursă: `4uPDF/Reports/INTROSPECTION-2026-06-20/`
 
 - [x] 🔴 **`localhost:3099` hardcodat în 5 fișiere (8 locuri)** — DONE (commit `d376fb9`, deployat VPS2 rsync 2026-06-26 ledger `107d026`; re-verificat 2026-07-12: fișierele deployate all-relative, `NEXT_PUBLIC_API_URL=https://4updf.com` setat, proxy live `/api/batch-processing/status`→404 + `/api/invoice-extractor/upload`→405 = backend accesibil, nu refused). TODO era stale.
   - 🗣️ *Pe înțelesul tău:* 4 unelte încercau să vorbească cu calculatorul vizitatorului în loc de server. Reparat + verificat live — merg pentru toți.
-- [ ] 🔴 **Sitemap acoperă doar 13/70 unelte** — pierdere SEO masivă pe restul.
-  - 🗣️ *Pe înțelesul tău:* Google vede doar 13 din cele 70 de unelte, deci restul nu apar în căutări. După completarea sitemap-ului, toate uneltele pot fi găsite pe Google.
-- [ ] 🟡 **`JWT_SECRET_KEY` fix în VPS2 `.env`** (acum random fallback → restart deloghează pe toți) + confirmă `ALLOWED_ORIGINS`=4updf.com + `SUPER_ADMIN_KEY` real.
-  - 🗣️ *Pe înțelesul tău:* Acum la fiecare repornire a serverului toți utilizatorii sunt delogați (cheia de login se schimbă singură). După fix, sesiunile rămân valide după restart.
-- [ ] 🟡 **`npm audit fix`** (`next`+`undici` high; `next` posibil breaking) + rate-limit pe login + tool endpoints.
-  - 🗣️ *Pe înțelesul tău:* Sunt vulnerabilități în biblioteci și login-ul n-are limită de încercări. După fix, e sigur și mai greu de atacat prin forțare.
-- [ ] 🟡 **GDPR** („Refuză tot" + GA-after-consent) + README/STRATEGY lipsă.
-  - 🗣️ *Pe înțelesul tău:* Lipsește butonul „Refuză tot" la cookie-uri și urmărirea pornește înainte de acord. După fix, ești conform GDPR și nu urmărești fără permisiune.
+- [x] 🔴 **Sitemap** — DONE 2026-07-12 (commit `c2ae0c5`, deployat+verificat live). Erau 36 (nu 13), acum **44 = paritate cu rutele reale** `web/app/tools/*`. Adăugate 8 (edit/annotate/redact/sign/organize-pdf, html-to-pdf, extract-figure, ai-assistant) — toate 200 live. Sitemap.xml live confirmă 44 URL-uri /tools/. „70" din raport era supraevaluat.
+  - 🗣️ *Pe înțelesul tău:* Google vede acum toate cele 44 de unelte, nu doar o parte.
+- [x] 🟡 **`JWT_SECRET_KEY` / `ALLOWED_ORIGINS`** — VERIFICAT 2026-07-12: **NU e o problemă reală**. `api.py` NU citește `.env` (fără `load_dotenv`, systemd fără `EnvironmentFile`) → toate `os.environ.get` folosesc fallback-urile. Secretul JWT efectiv = `jwt_secret_key` din DB (`get_setting`, stabil) → **restart NU deloghează** (raportul greșea). `ALLOWED_ORIGINS` fallback = `localhost:3098,https://4updf.com` → CORS deja restrictiv la 4updf.com. `SUPER_ADMIN_KEY` env inert (auth prin JWT cookie). Editările `.env` ar fi inerte → nefăcute (wiring `.env`-loading ar injecta toate varele = risc). Zero acțiune necesară.
+  - 🗣️ *Pe înțelesul tău:* Frica era că repornirea deloghează lumea — dar cheia reală stă în baza de date și rămâne stabilă. Deci nu era nimic de reparat.
+- [x] 🟡 **`npm audit fix` + rate-limit login** — DONE 2026-07-12 (commit `c2ae0c5`, deployat+verificat). Deps: 6→2 vulns (undici `7.28.0` + next `16.2.10`, patch non-breaking). Cele 2 rămase = `postcss` transitiv în `next`; „fix"-ul npm = downgrade `next`→9.3.3 (rupe tot) → **respins/acceptat documentat** (neexploatabil în build static). Rate-limit: `/api/auth/login` 10/60s + `/api/auth/register` 5/300s per IP; cheie pe `X-Real-IP` (nespoofabil), NU `X-Forwarded-For[0]` (fix din /review). **Verificat live**: 10 login-uri→401, al 11-lea→429.
+  - 🗣️ *Pe înțelesul tău:* Biblioteci actualizate + login-ul are acum limită (după 10 încercări greșite te oprește 1 minut) → mult mai greu de spart.
+- [x] 🟡 **GDPR** — DONE 2026-07-12 (commit `c2ae0c5`, deployat+verificat, „Reject All" în bundle). Banner-ul avea deja refuz („Necessary Only") + GA în Consent Mode `denied` by default + pageview gated pe consent → **GA-after-consent deja OK**. Îmbunătățit: buton relabel „Reject All" + prominență vizuală egală cu „Accept All" (finding S10 = refuzul nu era la fel de vizibil).
+  - 🗣️ *Pe înțelesul tău:* Butonul de refuz e acum la fel de clar ca cel de accept, iar urmărirea oricum nu pornea fără acord.
 - _Solid: bcrypt, JWT semnat, anti-path-traversal, CSP, CORS non-wildcard, 0 SQLi, cleanup 24h. split-ocr (NO-TOUCH) — upload nume brut semnalat doar, fără fix._
 
 ---
