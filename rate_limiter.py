@@ -20,7 +20,16 @@ class RateLimiter:
         self.last_cleanup = time.time()
 
     def _get_client_id(self, request: Request) -> str:
-        """Extract client identifier from request."""
+        """Extract client identifier from request.
+
+        Prefer X-Real-IP: nginx sets it to $remote_addr (overwrite), so it is the
+        trusted real client IP and cannot be spoofed by the caller. X-Forwarded-For
+        uses $proxy_add_x_forwarded_for (append), so its first element is
+        client-controlled — a brute-forcer could rotate it to dodge the limit.
+        """
+        real_ip = request.headers.get("X-Real-IP")
+        if real_ip:
+            return real_ip.strip()
         forwarded = request.headers.get("X-Forwarded-For")
         if forwarded:
             return forwarded.split(",")[0].strip()

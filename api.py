@@ -970,6 +970,7 @@ async def newsletter_subscribe(request: Request):
 
 @app.post("/api/auth/register")
 async def register(
+    request: Request,
     email: str = Form(...),
     password: str = Form(...),
     plan: str = Form("free"),
@@ -978,6 +979,8 @@ async def register(
     acq_referrer: str = Form(None),
 ):
     """Register a new user."""
+    # Anti-abuse: cap account creation per client IP (raises 429 when exceeded).
+    await check_rate_limit(request, max_requests=5, window=300, endpoint="register")
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
 
@@ -1024,6 +1027,8 @@ async def register(
 @app.post("/api/auth/login")
 async def login(request: Request):
     """Login and get JWT token. Accepts JSON or Form data."""
+    # Brute-force guard: cap login attempts per client IP (raises 429 when exceeded).
+    await check_rate_limit(request, max_requests=10, window=60, endpoint="login")
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
         body = await request.json()

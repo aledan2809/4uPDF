@@ -234,8 +234,8 @@ Backend-ul Advanced nu e doar fix de onestitate, e **venit**, pe două suprafeț
 ## 4uPDF (`4updf.com`) — ACTIVE (split-ocr = NO-TOUCH) (fix-urile așteaptă review)
 Sursă: `4uPDF/Reports/INTROSPECTION-2026-06-20/`
 
-- [ ] 🔴 **`localhost:3099` hardcodat în 5 fișiere (8 locuri)** — 4 unelte batch/extractor RUPTE în prod (ocolesc proxy-ul). Fix: `/api/...` relativ + confirmă `NEXT_PUBLIC_API_URL` pe prod.
-  - 🗣️ *Pe înțelesul tău:* 4 unelte încearcă să vorbească cu calculatorul tău local în loc de server, deci sunt rupte pe site-ul live. După fix, funcționează pentru toți vizitatorii.
+- [x] 🔴 **`localhost:3099` hardcodat în 5 fișiere (8 locuri)** — DONE (commit `d376fb9`, deployat VPS2 rsync 2026-06-26 ledger `107d026`; re-verificat 2026-07-12: fișierele deployate all-relative, `NEXT_PUBLIC_API_URL=https://4updf.com` setat, proxy live `/api/batch-processing/status`→404 + `/api/invoice-extractor/upload`→405 = backend accesibil, nu refused). TODO era stale.
+  - 🗣️ *Pe înțelesul tău:* 4 unelte încercau să vorbească cu calculatorul vizitatorului în loc de server. Reparat + verificat live — merg pentru toți.
 - [ ] 🔴 **Sitemap acoperă doar 13/70 unelte** — pierdere SEO masivă pe restul.
   - 🗣️ *Pe înțelesul tău:* Google vede doar 13 din cele 70 de unelte, deci restul nu apar în căutări. După completarea sitemap-ului, toate uneltele pot fi găsite pe Google.
 - [ ] 🟡 **`JWT_SECRET_KEY` fix în VPS2 `.env`** (acum random fallback → restart deloghează pe toți) + confirmă `ALLOWED_ORIGINS`=4updf.com + `SUPER_ADMIN_KEY` real.

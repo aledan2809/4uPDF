@@ -40,6 +40,18 @@ const tools = [
   "invoice-extractor",
   "receipt-extractor",
   "batch-document-splitter",
+  // Editing / organizing
+  "edit-pdf",
+  "annotate-pdf",
+  "redact-pdf",
+  "sign-pdf",
+  "organize-pdf",
+  // Conversion / extraction / AI
+  "html-to-pdf",
+  "extract-figure",
+  "ai-assistant",
+  // NOTE: keep this list in sync with the real routes under web/app/tools/*
+  // (every slug must have a page.tsx; all verified live 200 on 2026-07-12).
 ];
 
 export default function sitemap(): MetadataRoute.Sitemap {
