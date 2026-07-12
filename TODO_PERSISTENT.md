@@ -261,7 +261,24 @@ Sursă: `4uPDF/Reports/INTROSPECTION-2026-06-20/`
 - Feed conversie → funnel MA (segment „split-ocr B2B", vezi item funnel mai jos).
 - Verificare live: anon 401, free 403/limită, paid 200 (fără a rupe clientul existent — grandfathering dacă apare).
 
-## [ ] 📣 Funnel 4uPDF în MA — tot outbound prin CRM (PLAN aprobat, BUILD = sesiune MA) — decis 2026-07-12
+## [~] 📣 Funnel 4uPDF în MA — tot outbound prin CRM — FUNDAȚIE LIVE + VERIFICATĂ 2026-07-12
+
+> **DONE 2026-07-12 (Increment 1, verificat live pe prod):**
+> - **MA**: 5 secvențe funnel create (commit MA `3201232`, `scripts/setup-4updf-funnel.mjs`): `4updf-welcome`, `4updf-limit-hit`, `4updf-paid-onboarding`, `4updf-winback`, `4updf-splitocr-b2b`. Copy onest, fără „AI". Dormante (nu trimit nimic până la enrollment).
+> - **4uPDF**: emitter `emit_to_ma` (commit 4uPDF `8d67f41`, api.py) — fire-and-forget thread daemon, fail-soft, config din tabela `settings` (`ma_import_url`+`ma_import_secret`, fiindcă procesul nu citește `.env`). Cablat pe 3 puncte: **register→welcome**, **cap-hit 429 (doar logat)→limit-hit**, **Stripe checkout completed→paid-onboarding**.
+> - **Config**: `ma_import_url`+`ma_import_secret` setate în settings 4updf (VPS2).
+> - **VERIFICAT LIVE**: register real pe 4updf.com → MA lead creat + înrolat în „4uPDF — Welcome" status=active. Date test curățate ambele părți.
+> - **Sursă = `manual-import`** (allowlist MA acceptă doar apify/manual-import; first-party=manual-import defensibil; atribuire reală în project+custom.app).
+>
+> **RĂMAS (follow-ups):**
+> - **MA allowlist** — adaugă sursă first-party `app:4updf` în `src/app/api/external/leads/import/route.ts` (`ALLOWED_SOURCE`) pt atribuire curată. **Cere rebuild MA** → sesiune dedicată MA (acum sesiune paralelă activă → n-am atins app-code MA).
+> - **Win-back cron** — secvența `4updf-winback` există dar n-are trigger; trebuie un cron sweep care înrolează userii inactivi N zile (enroll via import cu trigger `4updf-winback`).
+> - **split-ocr B2B** — secvența `4updf-splitocr-b2b` există dar dormantă; se alimentează DUPĂ gatarea split-ocr (item de mai sus) care aduce identitatea userilor.
+> - **Early-supporter** — secvența veche există + funcțională (segment 2); de decis dacă deprecăm scriptul one-off `seed-4updf-early-supporter.mjs` sau îl păstrăm ca cohort-seeder.
+> - **Campania B (4 externi)** — pe HOLD; de decis dacă o trimitem prin funnel acum (segment early-supporter) sau așteptăm.
+> - Consimțământ: emitem `optIn:true` pe signup (relație de cont + opt-out în footer) — aliniat cu tratamentul early-supporter; de reconfirmat dacă vrei consimțământ marketing explicit la signup.
+
+### (plan original, pentru referință)
 
 **Decizie user 2026-07-12:** TOATE mesajele 4uPDF trec printr-un **funnel CRM dedicat în MarketingAutomation** — nu scripturi one-off (`seed-4updf-early-supporter.mjs` = deprecat, se pliază ca segment). Campania B early-supporter = HOLD până e în funnel. „Întâi plan, apoi build."
 
