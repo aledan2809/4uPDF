@@ -488,6 +488,50 @@ def decode_jwt_token(token: str) -> Optional[Dict[str, Any]]:
     except jwt.InvalidTokenError:
         return None
 
+def emit_to_ma(email: str, trigger: str, custom: Optional[Dict[str, Any]] = None, opt_in: bool = True) -> None:
+    """Fire-and-forget: enroll a 4uPDF lead into a MarketingAutomation CRM funnel segment.
+
+    Non-blocking (daemon thread) and fail-soft — a down or mis-configured MA must never
+    slow or break a user request. Config lives in the settings table (ma_import_url +
+    ma_import_secret), consistent with the app's other integrations (the process does
+    not read .env). No-op when unconfigured. MA dedups re-enrollment by (project,email),
+    so repeated emits for the same lead are safe.
+    """
+    if not email or not trigger:
+        return
+
+    def _run():
+        try:
+            # Config + DB reads happen off the request path (in this thread), so a slow
+            # settings read or a down MA never adds latency to the user's request.
+            base = (get_setting("ma_import_url", os.environ.get("MA_LEADS_IMPORT_URL", "")) or "").strip()
+            secret = (get_setting("ma_import_secret", os.environ.get("MA_LEADS_IMPORT_SECRET", "")) or "").strip()
+            if not base or not secret:
+                return  # integration not configured → no-op
+            import urllib.request
+            # source="manual-import": the MA import endpoint's allowlist accepts apify
+            # (scraped/cold) or manual-import (known/consented). First-party 4uPDF signups
+            # are the latter. Real attribution rides in project="4uPDF" + custom.app.
+            merged = {"app": "4updf", **(custom or {})}
+            payload = json.dumps({
+                "project": "4uPDF",
+                "source": "manual-import",
+                "enrollSequenceTrigger": trigger,
+                "items": [{"email": email, "optIn": bool(opt_in), "custom": merged}],
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                base, data=payload, method="POST",
+                headers={"Content-Type": "application/json", "X-Import-Secret": secret},
+            )
+            urllib.request.urlopen(req, timeout=5).read()
+        except Exception:
+            pass  # never surface to the request path
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="ma-emit").start()
+    except Exception:
+        pass
+
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[Dict[str, Any]]:
     """Get current authenticated user from JWT token."""
     if not credentials:
@@ -737,6 +781,10 @@ async def free_daily_task_cap(request: Request, call_next):
         except Exception:
             used = None  # fail-open on counting error — never block a request
         if used is not None and used >= cap:
+            # CRM funnel: a signed-in free user hit the daily cap → limit-hit segment (MA).
+            # Anonymous callers have no email to enroll; MA dedups repeat emits per lead.
+            if user and user.get("email"):
+                emit_to_ma(user["email"], "4updf-limit-hit", {"cap": cap, "used": used})
             return _JSONResponse(status_code=429, content={
                 "detail": f"You've reached the free daily limit of {cap} tasks. Upgrade to PRO for unlimited — SUMMER HOT €4.99/mo.",
                 "reason": "daily_task_limit",
@@ -1012,6 +1060,9 @@ async def register(
               _acq_source, _acq_campaign, _acq_referrer))
 
         token = create_jwt_token(user_id, email)
+
+        # CRM funnel: enroll the new free account into the 4uPDF welcome segment (MA).
+        emit_to_ma(email, "4updf-welcome", {"acqSource": _acq_source, "entry": "register"})
 
         return {
             "success": True,
@@ -1834,6 +1885,11 @@ async def stripe_webhook(request: Request):
                         subscription_status = 'active', updated_at = ?
                     WHERE id = ?
                 """, (plan, plan, session.subscription, datetime.utcnow().isoformat(), user_id))
+                # CRM funnel: PRO purchase completed → paid-onboarding segment (MA).
+                cursor.execute("SELECT email FROM users WHERE id = ?", (user_id,))
+                _paid = cursor.fetchone()
+                if _paid and _paid["email"]:
+                    emit_to_ma(_paid["email"], "4updf-paid-onboarding", {"plan": plan})
 
     elif event.type == "customer.subscription.updated":
         subscription = event.data.object
