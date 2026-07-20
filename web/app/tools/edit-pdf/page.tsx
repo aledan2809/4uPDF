@@ -97,7 +97,7 @@ const faqs = [
 const relatedTools = [
   { name: "Sign PDF", href: "/tools/sign-pdf", description: "Add a signature to your PDF" },
   { name: "Watermark PDF", href: "/tools/watermark-pdf", description: "Add watermarks to your PDF" },
-  { name: "Searchable PDF (OCR)", href: "/tools/split-ocr", description: "Make a scan searchable" },
+  { name: "Searchable PDF (OCR)", href: "/split-ocr", description: "Make a scan searchable" },
 ];
 
 const howItWorks = [
