@@ -57,6 +57,9 @@ for _fp in [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
 ]:
     if os.path.exists(_fp):
         UNICODE_FONT_PATH = _fp
@@ -5820,6 +5823,219 @@ async def edit_pdf_text(
                 Path(p).unlink(missing_ok=True)
             except Exception:
                 pass
+        try:
+            saved_file.unlink()
+        except Exception:
+            pass
+
+
+@app.post("/api/edit-pdf-overlay")
+async def edit_pdf_overlay(
+    file: UploadFile = File(...),
+    elements: str = Form(...),
+):
+    """Stamp NEW overlay content onto a PDF — the "add / cover" editor for scans.
+
+    Unlike /api/edit-pdf-text (which rewrites an existing text run), this paints
+    fresh content on top of the page, so it works on scanned/image PDFs that have
+    no real text layer. `elements` is a JSON array; coordinates are page fractions
+    with a top-left origin (0..1):
+
+        [
+          {"type":"cover","page":1,"fx":0.10,"fy":0.20,"fw":0.25,"fh":0.05,
+           "color":"auto"},                         # white-out box; auto samples bg
+          {"type":"text","page":1,"fx":0.10,"fy":0.30,"fw":0.40,
+           "text":"Observatie","size":14,"color":"#000000"},
+          {"type":"image","page":1,"fx":0.60,"fy":0.85,"fw":0.20,"fh":0.08,
+           "data":"data:image/png;base64,...."}
+        ]
+
+    Covers are applied first, then text, then images, so text placed over a cover
+    box stays visible. Text uses the bundled Unicode font so Romanian diacritics
+    render correctly.
+    """
+    import json as _json
+    import base64 as _b64
+
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {"id": job_id, "status": "processing", "progress": 0, "started_at": time.time()}
+
+    saved_file = save_upload_file(file)
+
+    def _hex_to_rgb(val, pg=None, rect=None):
+        s = ("" if val is None else str(val)).strip().lower()
+        if s in ("auto", "bg", "background") and pg is not None and rect is not None:
+            return _detect_bg_color(pg, rect)
+        if s in ("", "white"):
+            return (1, 1, 1)
+        if s == "black":
+            return (0, 0, 0)
+        s = s.lstrip("#")
+        if len(s) == 3:
+            s = "".join(c * 2 for c in s)
+        if len(s) == 6:
+            try:
+                return tuple(int(s[i:i + 2], 16) / 255 for i in (0, 2, 4))
+            except ValueError:
+                pass
+        return (0, 0, 0)
+
+    try:
+        try:
+            el_list = _json.loads(elements)
+        except Exception:
+            raise HTTPException(status_code=400, detail="`elements` must be valid JSON")
+        if not isinstance(el_list, list) or not el_list:
+            raise HTTPException(status_code=400, detail="No elements provided")
+        if len(el_list) > 500:
+            raise HTTPException(status_code=400, detail="Too many elements (max 500)")
+
+        try:
+            doc = fitz.open(str(saved_file))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not read the file as a PDF.")
+        if getattr(doc, "needs_pass", False):
+            doc.close()
+            raise HTTPException(status_code=400, detail="This PDF is password-protected. Remove the password first (Unlock PDF), then edit it.")
+        n_pages = doc.page_count
+        if n_pages == 0:
+            doc.close()
+            raise HTTPException(status_code=400, detail="This PDF has no pages.")
+
+        # Apply order within a page: covers under text under images.
+        order = {"cover": 0, "text": 1, "image": 2}
+        by_page = {}
+        for el in el_list:
+            try:
+                pidx = int(el["page"]) - 1
+                etype = str(el.get("type", "")).lower()
+            except (KeyError, TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Each element needs a page and type")
+            if etype not in order:
+                raise HTTPException(status_code=400, detail="Unknown element type")
+            if pidx < 0 or pidx >= n_pages:
+                raise HTTPException(status_code=400, detail="Element references a page out of range")
+            by_page.setdefault(pidx, []).append(el)
+
+        applied = 0
+        for pidx, elist in by_page.items():
+            page = doc[pidx]
+            W, H = page.rect.width, page.rect.height
+            for el in sorted(elist, key=lambda e: order.get(str(e.get("type", "")).lower(), 9)):
+                etype = str(el.get("type", "")).lower()
+                try:
+                    fx = float(el.get("fx", 0)); fy = float(el.get("fy", 0))
+                except (TypeError, ValueError):
+                    continue
+                x0 = max(0.0, min(fx, 1.0)) * W
+                y0 = max(0.0, min(fy, 1.0)) * H
+
+                if etype == "cover":
+                    try:
+                        fw = float(el.get("fw", 0) or 0); fh = float(el.get("fh", 0) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if fw <= 0 or fh <= 0:
+                        continue
+                    rect = fitz.Rect(x0, y0, x0 + fw * W, y0 + fh * H) & page.rect
+                    if rect.is_empty:
+                        continue
+                    col = _hex_to_rgb(el.get("color", "auto"), page, rect)
+                    page.draw_rect(rect, color=col, fill=col)
+                    applied += 1
+
+                elif etype == "text":
+                    text = str(el.get("text", ""))
+                    if not text.strip():
+                        continue
+                    try:
+                        size = float(el.get("size", 14) or 14)
+                    except (TypeError, ValueError):
+                        size = 14.0
+                    size = max(4.0, min(size, 200.0))
+                    col = _hex_to_rgb(el.get("color", "#000000"))
+                    try:
+                        fw = float(el.get("fw", 0) or 0)
+                    except (TypeError, ValueError):
+                        fw = 0.0
+                    width_pt = fw * W if fw > 0 else max(60.0, W - x0 - 4)
+                    box = fitz.Rect(x0, y0, min(x0 + width_pt, W), H)
+                    inserted = False
+                    try:
+                        page.insert_textbox(
+                            box, text, fontsize=size, color=col,
+                            fontfile=UNICODE_FONT_PATH, fontname="F1",
+                            align=0, overlay=True,
+                        )
+                        inserted = True
+                    except Exception:
+                        inserted = False
+                    if not inserted:
+                        try:
+                            page.insert_text(
+                                fitz.Point(x0, y0 + size), text,
+                                fontsize=size, color=col,
+                                fontfile=UNICODE_FONT_PATH, fontname="F1",
+                                overlay=True,
+                            )
+                        except Exception:
+                            page.insert_text(
+                                fitz.Point(x0, y0 + size), text,
+                                fontsize=size, color=col, fontname="helv",
+                                overlay=True,
+                            )
+                    applied += 1
+
+                elif etype == "image":
+                    data = str(el.get("data", ""))
+                    if data.strip().lower().startswith("data:") and "," in data:
+                        data = data.split(",", 1)[1]
+                    try:
+                        raw = _b64.b64decode(data)
+                    except Exception:
+                        continue
+                    if not raw:
+                        continue
+                    try:
+                        fw = float(el.get("fw", 0) or 0); fh = float(el.get("fh", 0) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if fw <= 0 or fh <= 0:
+                        continue
+                    rect = fitz.Rect(x0, y0, x0 + fw * W, y0 + fh * H) & page.rect
+                    if rect.is_empty:
+                        continue
+                    try:
+                        page.insert_image(rect, stream=raw, overlay=True, keep_proportion=True)
+                        applied += 1
+                    except Exception:
+                        continue
+
+        if applied == 0:
+            doc.close()
+            raise HTTPException(status_code=422, detail="Nothing to apply. Add text or a cover box, then save.")
+
+        output_path = create_output_path("edited")
+        doc.save(str(output_path), deflate=True, garbage=3)
+        doc.close()
+
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["progress"] = 100
+        return {
+            "job_id": job_id,
+            "status": "done",
+            "download_url": f"/api/download/{output_path.name}",
+            "filename": output_path.name,
+            "edits_applied": applied,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        logger.exception("edit-pdf-overlay error")
+        raise HTTPException(status_code=500, detail="An internal error occurred while editing the PDF")
+    finally:
         try:
             saved_file.unlink()
         except Exception:
