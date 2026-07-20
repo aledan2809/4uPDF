@@ -1,5 +1,10 @@
 // E2E SuperAdmin Panel Test - 4uPDF (v3 - bypass client-side API_URL bug)
 import { chromium } from 'playwright';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+// Portable output dir (was a hardcoded Windows path): resolves to <script-dir>/Reports.
+const REPORTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'Reports');
 
 const BASE = 'https://4updf.com';
 // Key from .env: 4updf-superadmin-2026 (NOT the one in the task spec!)
@@ -17,7 +22,7 @@ function log(test, status, details = '') {
 
 async function shot(name) {
   try {
-    await page.screenshot({ path: `C:/Projects/4updf/Reports/e2e-${name}.png`, fullPage: true });
+    await page.screenshot({ path: path.join(REPORTS_DIR, `e2e-${name}.png`), fullPage: true });
   } catch (e) { /* ignore */ }
 }
 
@@ -552,9 +557,10 @@ ${['01-login-page', '02a-key-filled', '02b-post-login-task-key', '02c-dashboard-
 `;
 
   const fs = await import('fs');
-  fs.mkdirSync('C:/Projects/4updf/Reports', { recursive: true });
-  fs.writeFileSync('C:/Projects/4updf/Reports/E2E_SUPERADMIN_2026-03-27.md', report);
-  console.log('\n📄 Report: C:/Projects/4updf/Reports/E2E_SUPERADMIN_2026-03-27.md');
+  fs.mkdirSync(REPORTS_DIR, { recursive: true });
+  const reportPath = path.join(REPORTS_DIR, 'E2E_SUPERADMIN_2026-03-27.md');
+  fs.writeFileSync(reportPath, report);
+  console.log('\n📄 Report: ' + reportPath);
 }
 
 main().catch(console.error);
