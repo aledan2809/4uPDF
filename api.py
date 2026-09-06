@@ -4749,6 +4749,10 @@ async def text_to_pdf(
                 pass
 
 
+# Upper bound on pagination for /api/html-to-pdf — see the loop guard below.
+MAX_HTML_PDF_PAGES = 200
+
+
 @app.post("/api/html-to-pdf")
 async def html_to_pdf(
     file: UploadFile = File(None),
@@ -4771,18 +4775,38 @@ async def html_to_pdf(
 
         output_path = create_output_path("html_converted", ".pdf")
 
-        # Use fitz to create PDF from HTML
-        doc = fitz.open()
-        page = doc.new_page()
-        # Insert HTML as text (basic conversion)
-        rect = page.rect + fitz.Rect(36, 36, -36, -36)  # margins
-        page.insert_htmlbox(rect, html_text)
+        # Paginated HTML -> PDF via the Story API.
+        #
+        # This used to be a single new_page() + insert_htmlbox() whose return value was ignored:
+        # anything that did not fit on page one was DROPPED, and the response still said
+        # status "done", pages 1. Measured on a 60-line invoice: 57 lines survived and the total
+        # line vanished. For an invoice or a contract that is a document with missing amounts,
+        # handed back as a success.
+        #
+        # Story lays the content out across as many pages as it needs; `more` stays truthy while
+        # there is content left to place.
+        story = fitz.Story(html=html_text)
+        writer = fitz.DocumentWriter(str(output_path))
+        mediabox = fitz.paper_rect("a4")
+        where = mediabox + (36, 36, -36, -36)  # margins
 
-        # Get page count before closing document
-        page_count = doc.page_count
-
-        doc.save(str(output_path))
-        doc.close()
+        page_count = 0
+        more = 1
+        while more:
+            device = writer.begin_page(mediabox)
+            more, _ = story.place(where)
+            story.draw(device)
+            writer.end_page()
+            page_count += 1
+            # A malformed document (an unclosed element that never consumes height) can otherwise
+            # loop forever writing empty pages until the disk fills. Fail loudly instead.
+            if page_count > MAX_HTML_PDF_PAGES:
+                writer.close()
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"HTML too long to paginate (over {MAX_HTML_PDF_PAGES} pages)",
+                )
+        writer.close()
 
         jobs[job_id]["status"] = "done"
         jobs[job_id]["progress"] = 100
