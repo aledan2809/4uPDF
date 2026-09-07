@@ -18,6 +18,7 @@ import io
 import shutil
 import atexit
 import hashlib
+import hmac
 import logging
 import sqlite3
 import secrets
@@ -690,6 +691,30 @@ from fastapi.responses import JSONResponse as _JSONResponse
 # POST /api/* endpoints that are NOT metered tools (auth, billing, legal, admin,
 # housekeeping) + the NO-TOUCH CRITIC split-ocr module (excluded so the cap
 # never changes its behaviour).
+# Cheia prin care serviciile NOASTRE din ecosistem trec de plafonul gratuit.
+#
+# De ce o cheie și nu o excepție pe IP: serviciul ascultă pe 0.0.0.0, iar
+# `get_client_ip` are încredere în antetul `X-Forwarded-For` de la oricine. O
+# regulă „127.0.0.1 e al nostru" s-ar putea deci scrie din afară cu un antet
+# potrivit, iar plafonul gratuit — care e chiar modelul de business al aplicației
+# — ar deveni opțional pentru cine îl ghicește. O cheie nu se ghicește.
+#
+# Traficul intern NU devine invizibil: se scrie în usage_history sub numele
+# clientului, ca să se poată vedea cine consumă și cât.
+INTERNAL_UNLIMITED_KEY = os.getenv("INTERNAL_UNLIMITED_KEY", "").strip()
+
+
+def _internal_client(request: Request) -> Optional[str]:
+    """Numele serviciului nostru care sună, dacă vine cu cheia bună."""
+    if not INTERNAL_UNLIMITED_KEY:
+        return None
+    given = (request.headers.get("X-Internal-Key") or "").strip()
+    if not given or not hmac.compare_digest(given, INTERNAL_UNLIMITED_KEY):
+        return None
+    name = (request.headers.get("X-Internal-Client") or "").strip()[:40]
+    return re.sub(r"[^a-zA-Z0-9._-]", "", name) or "intern"
+
+
 _NON_TOOL_API_PREFIXES = (
     "/api/auth", "/api/legal", "/api/stripe", "/api/admin", "/api/superadmin",
     "/api/voucher", "/api/plans", "/api/check-limits", "/api/download",
@@ -766,6 +791,29 @@ async def free_daily_task_cap(request: Request, call_next):
     path = request.url.path
     if request.method != "POST" or not path.startswith("/api/") or path.startswith(_NON_TOOL_API_PREFIXES):
         return await call_next(request)
+
+    # Serviciile noastre trec nemăsurate: plafonul gratuit e pentru vizitatorii
+    # site-ului, nu pentru propriile aplicații care folosesc aceeași bibliotecă.
+    intern = None
+    try:
+        intern = _internal_client(request)
+    except Exception:
+        intern = None
+
+    if intern:
+        resp = await call_next(request)
+        if 200 <= resp.status_code < 300:
+            op = _operation_from_path(path)
+            if op != "track":
+                try:
+                    size = int(request.headers.get("content-length") or 0)
+                except Exception:
+                    size = 0
+                try:
+                    _record_operation_usage(None, "intern:" + intern, op, size)
+                except Exception:
+                    pass
+        return resp
 
     try:
         user = _user_from_bearer(request)
