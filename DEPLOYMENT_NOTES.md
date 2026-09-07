@@ -307,3 +307,30 @@ SQLite doesn't support concurrent writes. For production with multiple workers, 
 - Rate limiting uses usage_logs with daily/monthly aggregation
 - All timestamps are timezone-aware (UTC)
 - JSON columns support flexible metadata storage
+
+## Cheia internă (servicii din ecosistem) — 2026-09-07
+
+Serviciile noastre (CNAS-calculation și, la nevoie, altele) trec de plafonul
+gratuit de 3 sarcini/zi trimițând două antete pe apelurile POST către `/api/*`:
+
+```
+X-Internal-Key: <INTERNAL_UNLIMITED_KEY>
+X-Internal-Client: <numele-aplicatiei>
+```
+
+Plafonul public rămâne neatins: fără cheie, sau cu o cheie greșită, răspunsul e
+tot 429. Traficul intern se scrie în `usage_history` sub `intern:<client>`, deci
+se vede cine consumă și cât.
+
+⚠️ **Unde se pune cheia pe server: NU în `/var/www/4updf/.env`.** Fișierul acela
+nu e citit de `api.py` — nu există `load_dotenv` și unitatea systemd n-are
+`EnvironmentFile`. Valoarea reală stă într-un drop-in systemd:
+
+```
+/etc/systemd/system/4updf-api.service.d/internal-key.conf
+[Service]
+Environment=INTERNAL_UNLIMITED_KEY=…
+```
+
+După modificare: `systemctl daemon-reload && systemctl restart 4updf-api`.
+Copie în `Master/credentials/4updf.env` (doar ca referință, nu ca sursă).
